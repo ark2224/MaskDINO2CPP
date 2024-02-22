@@ -9,7 +9,7 @@
 #include "matcher.h"
 #include "SemanticSegmentor.h"
 #include "criterion.h"
-#include "image_list.h"
+#include "include/structures/image_list.h"
 #include "memory.h"
 
 
@@ -35,10 +35,10 @@ torch::Tensor MLP::forward(torch::Tensor& x) {
 }
 
 torch::Tensor window_partition(torch::Tensor x, int window_size) {
-    int B = x.sizes()[0];
-    int H = x.sizes()[1];
-    int W = x.sizes()[2];
-    int C = x.sizes()[3];
+    int B = int(x.sizes()[0]);
+    int H = int(x.sizes()[1]);
+    int W = int(x.sizes()[2]);
+    int C = int(x.sizes()[3]);
     x = x.view({B, int(H / window_size), window_size, int(W / window_size), window_size, C});
     torch::Tensor windows = x.permute({0, 1, 3, 2, 4, 5}).contiguous().view({-1, window_size, window_size, C});
     return windows;
@@ -56,7 +56,7 @@ class WindowAttention : torch::nn::Module {
 public:
     WindowAttention() { }; // default constructor to create SwinTransformerBlock constructor
     WindowAttention(const int d, std::vector<int> ws, const int nh,
-                    const bool qkvb = true, const float qks = -1,
+                    const bool qkvb = true, const double qks = -1,
                     const float ad = 0.0, const float pd = 0.0) : dim(d),
                     window_size(ws), num_heads(nh), qkv_bias(qkvb),
                     qk_scale(qks), attn_drop_ratio(ad), proj_drop_ratio(pd)
@@ -83,7 +83,7 @@ private:
     std::vector<int> window_size;
     int num_heads;
     bool qkv_bias;
-    float qk_scale;
+    double qk_scale;
     float attn_drop_ratio;
     float proj_drop_ratio;
     torch::nn::Linear qkv, proj;
@@ -102,15 +102,15 @@ void WindowAttention::assemble() {
     tmp.index_put_({torch::indexing::Slice(), torch::indexing::Slice(), 0}, window_size[0] - 1);
     tmp.index_put_({torch::indexing::Slice(), torch::indexing::Slice(), 1}, window_size[1] - 1);
     relative_coords += tmp;
-    torch::Tensor tmp = torch::zeros(relative_coords.sizes());
+    // torch::Tensor tmp = torch::zeros(relative_coords.sizes());
     tmp.index_put_({torch::indexing::Slice(), torch::indexing::Slice(), 0}, 2*window_size[1] - 1);
     relative_coords *= tmp;
     torch::Tensor relative_position_index = relative_coords.sum(-1);
     this->register_buffer("relative_position_index", relative_position_index);
 
     torch::Tensor &t = this->named_parameters()["relative_position_bias_table"];
-    float l = (1. + erf((-2/0.02) / sqrt(2.))) / 2.;
-    float u = (1. + erf((2/0.02) / sqrt(2.))) / 2.;
+    double l = (1. + erf((-2/0.02) / sqrt(2.))) / 2.;
+    double u = (1. + erf((2/0.02) / sqrt(2.))) / 2.;
     t.uniform_(2 * l - 1, 2 * u - 1);
     t.erfinv_();
     t.mul_(0.02 * sqrt(2.));
@@ -119,15 +119,17 @@ void WindowAttention::assemble() {
 }
 
 torch::Tensor WindowAttention::forward(torch::Tensor x, torch::Tensor mask = torch::ones({1})) {
-    int B_ = x.sizes()[0];
-    int N = x.sizes()[1];
-    int C = x.sizes()[2];
+    int B_ = int(x.sizes()[0]);
+    int N = int(x.sizes()[1]);
+    int C = int(x.sizes()[2]);
     torch::Tensor qkv_tensor = (
         qkv(x)
         .reshape({B_, N, 3, num_heads, int(C / num_heads)})
         .permute({2, 0, 3, 1, 4})
     );
-    torch::Tensor q, k, v = qkv_tensor[0], qkv_tensor[1], qkv_tensor[2];
+    torch::Tensor q = qkv_tensor.index({0});
+    torch::Tensor k = qkv_tensor.index({1});
+    torch::Tensor v = qkv_tensor.index({2});
     q *= qk_scale;
     torch::Tensor attn = torch::mm(q, k.transpose(-2, -1));
     torch::Tensor &rpbt = this->named_parameters()["relative_position_bias_table"];
@@ -136,7 +138,7 @@ torch::Tensor WindowAttention::forward(torch::Tensor x, torch::Tensor mask = tor
     relative_position_bias = relative_position_bias.permute({2, 0, 1}).contiguous();
     attn = attn + relative_position_bias.unsqueeze(0);
     if ( !mask.equal(torch::ones({1})) ) {
-        int nW = mask.sizes()[0];
+        int nW = int(mask.sizes()[0]);
         attn = attn.view({int(B_ / nW), nW, num_heads, N, N}) + mask.unsqueeze(1).unsqueeze(0);
         attn = attn.view({-1, num_heads, N, N});
     }
@@ -177,8 +179,8 @@ torch::Tensor DropPath::drop_path(torch::Tensor x, float drop_prob = 0., bool tr
 
 struct SwinTransformerBlockImpl : torch::nn::Module {
 public:
-    SwinTransformerBlockImpl(int d, int nh, int ws = 7, int ss = 0, float mr = 4.0, float qks = -1.,
-                         float dr = 0.0, float ad = 0.0, float dp = 0.0, bool qkvb = true);
+    SwinTransformerBlockImpl(int, int, int, int, float, float,
+                             float, float, float, bool);
     torch::Tensor forward(torch::Tensor, torch::Tensor);
     void set_H(int h) { H = h; }
     void set_W(int w) { W = w; }
@@ -190,7 +192,7 @@ private:
     DropPath drop_path;
     torch::nn::Identity non_drop_path;
     torch::nn::GELU act_layer = torch::nn::GELU();
-    torch::nn::LayerNorm norm1, norm2;
+    torch::nn::LayerNorm norm1 = nullptr, norm2 = nullptr;
     WindowAttention attn;
     MLP mlp;
 };
@@ -220,9 +222,9 @@ SwinTransformerBlockImpl::SwinTransformerBlockImpl(int d, int nh, int ws = 7, in
 }
 
 torch::Tensor SwinTransformerBlockImpl::forward(torch::Tensor x, torch::Tensor mask_matrix) {
-    int B = x.sizes()[0];
-    int L = x.sizes()[1];
-    int C = x.sizes()[2];
+    int B = int(x.sizes()[0]);
+    int L = int(x.sizes()[1]);
+    int C = int(x.sizes()[2]);
     if (H != 0 && W != 0 && L == H * W)
         std::cerr << "input feature has wrong size\n";
     torch::Tensor shortcut = x;
@@ -232,8 +234,8 @@ torch::Tensor SwinTransformerBlockImpl::forward(torch::Tensor x, torch::Tensor m
     int pad_r = (window_size - W % window_size) % window_size;
     int pad_b = (window_size - H % window_size) % window_size;
     x = torch::nn::functional::pad(x, torch::nn::functional::PadFuncOptions({0, 0, pad_l, pad_r, pad_t, pad_b}));
-    int Hp = x.sizes()[1];
-    int Wp = x.sizes()[2];
+    int Hp = int(x.sizes()[1]);
+    int Wp = int(x.sizes()[2]);
 
     torch::Tensor shifted_x;
     torch::Tensor attn_mask;
@@ -246,7 +248,7 @@ torch::Tensor SwinTransformerBlockImpl::forward(torch::Tensor x, torch::Tensor m
     }
     
     torch::Tensor x_windows = window_partition(shifted_x, window_size);
-    torch::Tensor x_windows = x_windows.view({-1, window_size*window_size, C});
+    x_windows = x_windows.view({-1, window_size*window_size, C});
 
     torch::Tensor attn_windows = attn.forward(x_windows, attn_mask);
     attn_windows = attn_windows.view({-1, window_size, window_size, C});
@@ -274,23 +276,23 @@ torch::Tensor SwinTransformerBlockImpl::forward(torch::Tensor x, torch::Tensor m
 }
 
 
-class PathMerging : torch::nn::Module {
+class PatchMerging : torch::nn::Module {
 public:
-    PathMerging(int d, torch::nn::LayerNorm nl = torch::nn::LayerNorm()) : dim(d), 
-        reduction(4*dim, 2*dim, true), norm_layer(nl)  {  }
+    PatchMerging(int d) : dim(d), reduction(4*d, 2*d, true), //took out norm_layer parameter bc it seemed pointless
+                          norm_layer(torch::nn::LayerNorm(4*d))  {  }
     
     torch::Tensor forward(torch::Tensor&, int&, int&);
 
 private:
     int dim;
     torch::nn::Linear reduction;
-    torch::nn::LayerNorm norm_layer;
+    torch::nn::LayerNorm norm_layer = nullptr;
 };
 
-torch::Tensor PathMerging::forward(torch::Tensor &x, int &H, int &W) {
-    int B = x.sizes()[0];
-    int L = x.sizes()[1];
-    int C = x.sizes()[2];
+torch::Tensor PatchMerging::forward(torch::Tensor &x, int &H, int &W) {
+    int B = int(x.sizes()[0]);
+    int L = int(x.sizes()[1]);
+    int C = int(x.sizes()[2]);
     if (H != 0 && W != 0 && L == H * W)
         std::cerr << "input feature has wrong size\n";
     
@@ -414,12 +416,12 @@ private:
     int embed_dim;
     bool has_norm;
     torch::nn::Conv2d proj;
-    torch::nn::LayerNorm norm;
+    torch::nn::LayerNorm norm = nullptr;
 };
 
 torch::Tensor PatchEmbed::forward(torch::Tensor x) {
-    int H = x.sizes()[2];
-    int W = x.sizes()[3];
+    int H = int(x.sizes()[2]);
+    int W = int(x.sizes()[3]);
     if (W % patch_size != 0)
         x = torch::nn::functional::pad(x, torch::nn::functional::PadFuncOptions({0, patch_size - W % patch_size}));
     if (H % patch_size != 0)
@@ -427,8 +429,8 @@ torch::Tensor PatchEmbed::forward(torch::Tensor x) {
     
     x = proj(x);
     if (has_norm) {
-        int Wh = x.sizes()[2];
-        int Ww = x.sizes()[3];
+        int Wh = int(x.sizes()[2]);
+        int Ww = int(x.sizes()[3]);
         x = x.flatten(2).transpose(1, 2);
         x = norm(x);
         x = x.transpose(1, 2).view({-1, embed_dim, Wh, Ww});
@@ -439,13 +441,9 @@ torch::Tensor PatchEmbed::forward(torch::Tensor x) {
 
 class SwinTransformer : torch::nn::Module {
 public:
-    SwinTransformer(int pis = 224, int patch_size = 4, int in_chans = 3, int ed = 96,
-                    std::vector<int> depths = {2, 2, 6, 2}, std::vector<int> num_heads = {3, 6, 12, 24},
-                    int window_size = 7, float mlp_ratio = 4.0, bool qkv_bias = true,
-                    float qk_scale = -1, float drop_rate = 0.0, float attn_drop_rate = 0.0, 
-                    float drop_path_rate = 0.2, torch::nn::LayerNorm norm_layer = torch::nn::LayerNorm(),
-                    bool ape = false, bool patch_norm = true, std::vector<int> out_indices = {0, 1, 2, 3},
-                    int frozen_stages = -1, bool use_checkpoint = false) { }
+    SwinTransformer(int, int, int, int, std::vector<int>, std::vector<int>,
+                    int, float, bool, float, float, float, float, //torch::nn::LayerNorm,
+                    bool, bool, std::vector<int>, int, bool);
     
     void freeze_stages();
     void init_weights(std::string &pretrained);
@@ -467,10 +465,10 @@ SwinTransformer::SwinTransformer(int pis = 224, int patch_size = 4, int in_chans
                                  std::vector<int> depths = {2, 2, 6, 2}, std::vector<int> num_heads = {3, 6, 12, 24},
                                  int window_size = 7, float mlp_ratio = 4.0, bool qkv_bias = true,
                                  float qk_scale = -1, float drop_rate = 0.0, float attn_drop_rate = 0.0, 
-                                 float drop_path_rate = 0.2, torch::nn::LayerNorm norm_layer = torch::nn::LayerNorm(),
+                                 float drop_path_rate = 0.2, //torch::nn::LayerNorm norm_layer = torch::nn::LayerNorm(), REMOVED PARAMETER BC THIS LAYER IS ALWAYS LAYERNORM
                                  bool ape = false, bool patch_norm = true, std::vector<int> out_indices = {0, 1, 2, 3},
                                  int frozen_stages = -1, bool use_checkpoint = false) : 
-                                 pretrain_img_size(pis), num_layers(depths.size()), embed_dim(ed), ape(ape),
+                                 pretrain_img_size(pis), num_layers(int(depths.size())), embed_dim(ed), ape(ape),
                                  patch_norm(patch_norm), out_ind(out_indices), frozen_stages(frozen_stages),
                                  drop_rate(drop_rate)
 {
@@ -478,8 +476,8 @@ SwinTransformer::SwinTransformer(int pis = 224, int patch_size = 4, int in_chans
     if (ape) {
         int patches_resolution = pretrain_img_size / patch_size;
         torch::Tensor &t = register_parameter("absolute_pos_embed", torch::zeros({1, embed_dim, patches_resolution, patches_resolution}));
-        float l = (1. + erf((-2/0.02) / sqrt(2.))) / 2.;
-        float u = (1. + erf((2/0.02) / sqrt(2.))) / 2.;
+        double l = (1. + erf((-2/0.02) / sqrt(2.))) / 2.;
+        double u = (1. + erf((2/0.02) / sqrt(2.))) / 2.;
         t.uniform_(2 * l - 1, 2 * u - 1);
         t.erfinv_();
         t.mul_(0.02 * sqrt(2.));
@@ -511,7 +509,7 @@ SwinTransformer::SwinTransformer(int pis = 224, int patch_size = 4, int in_chans
     }
     
     for (int i = 0; i < num_layers; ++i)
-        num_features.push_back(embed_dim * pow(2, i));
+        num_features.push_back(int(embed_dim * pow(2, i)));
     
     for (auto& i_layer : out_ind) {
         torch::nn::LayerNorm layer = torch::nn::LayerNorm(num_features[i_layer]);
@@ -531,7 +529,7 @@ void SwinTransformer::freeze_stages() {
         this->named_parameters()["absolute_pos_embed"].requires_grad_(false);
     }
     else if (frozen_stages >= 2) {
-        pos_drop(torch::nn::DropoutOptions(0.0));
+        pos_drop = torch::nn::Dropout(torch::nn::DropoutOptions().p(0.0));
         for (int i = 0; i < (frozen_stages - 1); ++i) {
             auto &layer = named_modules()["BasicLayer" + i];
             // layer.training();
@@ -564,8 +562,8 @@ std::unordered_map<std::string, torch::Tensor> SwinTransformer::forward(torch::T
         auto &layer = named_modules()["BasicLayer" + i];
         std::vector<torch::Tensor> res = static_cast<BasicLayer>(layer)(x, Wh, Ww);
         x = res[0];
-        Wh = *res[1].select(0,0).data<int64_t>();
-        Ww = *res[1].select(0,1).data<int64_t>();
+        Wh = *res[1].select(0,0).data_ptr<int64_t>();
+        Ww = *res[1].select(0,1).data_ptr<int64_t>();
         
         if (std::find(out_ind.begin(), out_ind.end(), i) != out_ind.end()) {
             auto &norm_layer = named_modules()["norm" + i];
@@ -581,13 +579,10 @@ std::unordered_map<std::string, torch::Tensor> SwinTransformer::forward(torch::T
 
 class D2SwinTransformer : Backbone {
 public:
-    D2SwinTransformer(std::vector<std::string>, int pis = 224, int patch_size = 4, int in_chans = 3, int ed = 96,
-                    std::vector<int> depths = {2, 2, 6, 2}, std::vector<int> num_heads = {3, 6, 12, 24},
-                    int window_size = 7, float mlp_ratio = 4.0, bool qkv_bias = true,
-                    float qk_scale = -1, float drop_rate = 0.0, float attn_drop_rate = 0.0, 
-                    float drop_path_rate = 0.2, torch::nn::LayerNorm norm_layer = torch::nn::LayerNorm(),
-                    bool ape = false, bool patch_norm = true, std::vector<int> out_indices = {0, 1, 2, 3},
-                    int frozen_stages = -1, bool use_checkpoint = false) { }
+    D2SwinTransformer(std::vector<std::string>, int, int, int, int,
+                    std::vector<int>, std::vector<int>, int, float, bool,
+                    float, float, float, float, //torch::nn::LayerNorm,
+                    bool, bool, std::vector<int>, int, bool);
     std::unordered_map<std::string, torch::Tensor> forward(torch::Tensor);
     std::unordered_map<std::string, ShapeSpec> output_shape();
     inline int size_divisibility() const { return 32; }
@@ -595,27 +590,26 @@ public:
 private:
     std::vector<std::string> out_features;
     SwinTransformer swintransformer;
-    std::unordered_map<std::string, int> out_feature_strides;
-    std::unordered_map<std::string, int> out_feature_channels;
-
+    std::unordered_map<std::string, int> out_feature_strides{};
+    std::unordered_map<std::string, int> out_feature_channels{};
 };
 
 D2SwinTransformer::D2SwinTransformer(std::vector<std::string> out_features, int pis = 224, int patch_size = 4, int in_chans = 3, int ed = 96,
                                     std::vector<int> depths = {2, 2, 6, 2}, std::vector<int> num_heads = {3, 6, 12, 24},
                                     int window_size = 7, float mlp_ratio = 4.0, bool qkv_bias = true,
                                     float qk_scale = -1, float drop_rate = 0.0, float attn_drop_rate = 0.0, 
-                                    float drop_path_rate = 0.2, torch::nn::LayerNorm norm_layer = torch::nn::LayerNorm(),
+                                    float drop_path_rate = 0.2, //torch::nn::LayerNorm norm_layer = torch::nn::LayerNorm(),
                                     bool ape = false, bool patch_norm = true, std::vector<int> out_indices = {0, 1, 2, 3},
                                     int frozen_stages = -1, bool use_checkpoint = false) : out_features(out_features)
 {
     swintransformer = SwinTransformer(pis, patch_size, in_chans, ed, depths, num_heads, window_size,
-                                      mlp_ratio, qkv_bias, qk_scale, drop_rate, attn_drop_rate, drop_path_rate,
-                                      norm_layer, ape, patch_norm, out_indices, frozen_stages, use_checkpoint);
-    out_feature_strides = {{"res2", 4}, {"res3", 8}, {"res4", 16}, {"res5", 32}};
-    out_feature_channels = {{"res2", swintransformer.num_features[0]},
-                            {"res3", swintransformer.num_features[1]},
-                            {"res4", swintransformer.num_features[2]},
-                            {"res5", swintransformer.num_features[3]}};
+                                      mlp_ratio, qkv_bias, qk_scale, drop_rate, attn_drop_rate, drop_path_rate, //norm_layer, 
+                                      ape, patch_norm, out_indices, frozen_stages, use_checkpoint);
+    out_feature_strides.insert({{"res2", 4}, {"res3", 8}, {"res4", 16}, {"res5", 32}});
+    out_feature_channels.insert({{"res2", swintransformer.num_features[0]},
+                                 {"res3", swintransformer.num_features[1]},
+                                 {"res4", swintransformer.num_features[2]},
+                                 {"res5", swintransformer.num_features[3]}});
 }
 
 std::unordered_map<std::string, torch::Tensor> D2SwinTransformer::forward(torch::Tensor x) {

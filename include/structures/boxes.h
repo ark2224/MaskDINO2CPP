@@ -9,6 +9,7 @@
 
 class Boxes : torch::Tensor {
 public:
+    Boxes() { }
     Boxes(torch::Tensor t) : tensor(t) { }
     Boxes(Boxes &b) : tensor(b.tensor) { }
     Boxes* clone() const { return new Boxes(*this); }

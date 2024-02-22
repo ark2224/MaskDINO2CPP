@@ -46,6 +46,7 @@ ideas for implementation
 // class CfgNode : std::unordered_map< std::string, std::vector<std::string> > {
 class CfgNode {
 public:
+    CfgNode() { }
     CfgNode(const CfgNode* cfgn, const std::vector<std::string> kl) :
             key_list(kl) { for ( auto ptr : (*cfgn).children) {
                 // unsure what to do for constructor!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -66,8 +67,8 @@ public:
 
     void setattr(const std::string name,
                  const std::string val);
-    CfgNode create_config_tree_from_dict(const std::vector<std::string> values,
-                                         const std::vector<std::string> key_list);
+    CfgNode create_config_tree_from_dict(const std::unordered_map<std::string, std::string> dic, //intentionally not a referece! need a copy...
+                                         const std::vector<std::string> &key_list);
     std::vector<std::string> getattr(const std::string name) const;
     void str() const;
     void repr() const;
@@ -145,16 +146,16 @@ void CfgNode::setattr(const std::string name, const std::string val) {
 CfgNode CfgNode::create_config_tree_from_dict(const std::unordered_map<std::string, std::string> dic, //intentionally not a referece! need a copy...
                                               const std::vector<std::string> &key_list) {
     CfgNode ret;
-    for ( const auto & [ key, value ] : dic )
-    {
-        if (value) {
-            key_list.push_back(key);
-            dic[key] = CfgNode(value, key_list);
-        }
-        else {
+    // for ( auto& [ key, value ] : dic )
+    // {
+    //     if (value) {
+    //         key_list.push_back(key);
+    //         dic[key] = CfgNode(value, key_list);
+    //     }
+    //     else {
 
-        }
-    }
+    //     }
+    // }
     return ret;
 }
 

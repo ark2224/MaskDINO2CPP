@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 // #include "bitmasks.h"
-#include "boxes.h"
+#include "../structures/boxes.h"
 
 #ifndef BOXOPERATIONS_H
 #define BOXOPERATIONS_H

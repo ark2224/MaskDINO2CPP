@@ -16,7 +16,7 @@ public:
     bool copy_from_local(const std::string local_path, const std::string dst_path, bool overwrite = false);
     void opent(const std::string path, const std::string mode = "r", const int buffering = 32);
     void opena(const std::string path, const std::string mode = "r", const int buffering = -1);
-    bool async_join(const std::string path = "");
+    bool async_join(const std::string);
 
 
 private:
@@ -35,6 +35,7 @@ bool PathManager::async_join(const std::string path = "") {
     if (!non_blocking_io_manager) {
         
     }
+    return false;
 }
 
 #endif

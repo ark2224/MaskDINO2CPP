@@ -10,7 +10,7 @@
 
 class ImageList {
 public:
-    ImageList(torch::Tensor t) : tensor(t) { int image_sizes[3]{t.sizes()[0], t.sizes()[1], t.sizes()[2]};  }
+    ImageList(torch::Tensor t) : tensor(t) { int image_sizes[3]{int(t.sizes()[0]), int(t.sizes()[1]), int(t.sizes()[2])};  }
     // ImageList(torch::Tensor t, int arr[3]) : tensor(t), image_sizes(arr) { }
     int len();
     torch::Tensor getitem(int idx) { return tensor[idx]; }

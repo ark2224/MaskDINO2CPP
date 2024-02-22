@@ -4,7 +4,7 @@
 #include "matcher.h"
 #include "SemanticSegmentor.h"
 #include "criterion.h"
-#include "image_list.h"
+#include "include/structures/image_list.h"
 #include "memory.h"
 
 

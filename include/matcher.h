@@ -11,7 +11,7 @@
 
 class HungarianMatcher {
 public:
-    HungarianMatcher(float cc, float cm, float cd, float np, float cb, float cg) :
+    HungarianMatcher(float cc, float cm, float cd, int np, float cb, float cg) :
                     cost_class(cc), cost_mask(cm), cost_dice(cd), num_points(np),
                     cost_box(cb), cost_giou(cg) { }
     torch::Tensor memory_efficient_forward(torch::Tensor outputs,

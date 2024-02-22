@@ -4,7 +4,7 @@
 #include "matcher.h"
 #include "SemanticSegmentor.h"
 #include "criterion.h"
-#include "image_list.h"
+#include "include/structures/image_list.h"
 #include "memory.h"
 
 using std::cout;
@@ -108,17 +108,17 @@ public:
                         Each dict contains keys "id", "category_id", "isthing".
     */
 
-    vector<torch::Tensor> prepare_targets(torch::Tensor &targets, torch::Tensor &images);
+    vector<torch::Tensor> prepare_targets(torch::Tensor&, torch::Tensor&);
 
-    vector<torch::Tensor> prepare_targets_detr(torch::Tensor targets, torch::Tensor images);
+    vector<torch::Tensor> prepare_targets_detr(torch::Tensor, torch::Tensor);
 
-    torch::Tensor sematnic_inference(torch::Tensor mask_cls, torch::Tensor mask_pred);
+    torch::Tensor sematnic_inference(torch::Tensor, torch::Tensor);
 
-    torch::Tensor panoptic_inference(torch::Tensor &mask_cls, torch::Tensor &mask_pred);//check return type
+    torch::Tensor panoptic_inference(torch::Tensor&, torch::Tensor&);//check return type
 
-    torch::Tensor instance_inference(torch::Tensor mask_cls, torch::Tensor mask_pred, torch::Tensor mask_box_result);//check return type
+    torch::Tensor instance_inference(torch::Tensor, torch::Tensor, torch::Tensor);//check return type
 
-    torch::Tensor box_postprocess(torch::Tensor out_bbox, int img_h, int img_w);
+    torch::Tensor box_postprocess(torch::Tensor, int, int);
 
 private:
 /*  Args:
@@ -197,7 +197,7 @@ MaskDINO2 *MaskDINO2::from_config(CfgNode cfg) { //should you have this?
         cost_class_weight,
         cost_mask_weight,
         cost_dice_weight,
-        model_vec.at("train_num_points"),
+        int(model_vec.at("train_num_points")),
         cost_box_weight,
         cost_giou_weight
     );
@@ -246,7 +246,7 @@ MaskDINO2 *MaskDINO2::from_config(CfgNode cfg) { //should you have this?
 }
 
 std::vector<std::unordered_map< std::string, torch::Tensor >>
-                MaskDINO2::forward(vector<vector<torch::Tensor>> batched_inputs) {
+    MaskDINO2::forward(vector<vector<torch::Tensor>> batched_inputs) {
     // ARGS:
     // batched_inputs : vector<vector<torch::Tensor>>
     //      each vector<vector<>> is a batch
@@ -268,7 +268,9 @@ std::vector<std::unordered_map< std::string, torch::Tensor >>
 
     if (training) {
         ;
+        std::vector<std::unordered_map< std::string, torch::Tensor >> processed_results;
         // will fill in later
+        return processed_results;
     }
     else {
         std::vector< std::unordered_map<std::string, torch::Tensor> > outputs;
@@ -295,8 +297,8 @@ std::vector<std::unordered_map< std::string, torch::Tensor >>
         std::vector<std::unordered_map< std::string, torch::Tensor >> processed_results;
 
         for (int i = 0; i < images.size(); ++i) {
-            int height = images[i].size(0);
-            int width = images[i].size(1);
+            int height = int(images[i].size(0));
+            int width = int(images[i].size(1));
             // skipped real height^
             processed_results.push_back({});
             std::vector<int64_t> new_size{mask_pred_results[i].size(-2), mask_pred_results[i].size(-1)}; // padded size
@@ -308,7 +310,7 @@ std::vector<std::unordered_map< std::string, torch::Tensor >>
             // semantic segmentation inference
             if (semantic_on) {
                 torch::Tensor r = sematnic_inference(mask_cls_results[i], mask_pred_results[i]);
-                if (sem_seg_postprocess_before_inference) {
+                if (sem_seg_postprocess_before_inference)
                     r = sem_seg_postprocessing(mask_pred_results[i], sizes, height, width);
                 processed_results.push_back({{"sem_seg", r}});
             }
@@ -321,8 +323,8 @@ std::vector<std::unordered_map< std::string, torch::Tensor >>
 
             // instance segmentation inference
             if (instance_on) {
-                height = new_size[0]/sizes[0]*height;
-                width = new_size[1]/sizes[1]*width;
+                height = int(new_size[0])/int(sizes[0])*height;
+                width = int(new_size[1])/int(sizes[1])*width;
                 mask_box_results[i] = box_postprocess(mask_box_results[i], height, width);
                 torch::Tensor instance_r = instance_inference(mask_cls_results[i],
                                                               mask_pred_results[i],
@@ -338,34 +340,34 @@ std::vector<std::unordered_map< std::string, torch::Tensor >>
 
 
 vector<torch::Tensor> MaskDINO2::prepare_targets(torch::Tensor &targets, torch::Tensor &images) {
-
+    return std::vector<torch::Tensor> {targets};
 }
 
 vector<torch::Tensor> MaskDINO2::prepare_targets_detr(torch::Tensor targets, torch::Tensor images) {
-
+    return std::vector<torch::Tensor> {targets};
 }
 
 torch::Tensor MaskDINO2::sematnic_inference(torch::Tensor mask_cls, torch::Tensor mask_pred) {
-
+    return mask_pred;
 }
 
 torch::Tensor MaskDINO2::panoptic_inference(torch::Tensor &mask_cls, torch::Tensor &mask_pred) {
-
+    return mask_pred;
 }
 
 torch::Tensor MaskDINO2::instance_inference(torch::Tensor mask_cls, torch::Tensor mask_pred, torch::Tensor mask_box_result) {//check return type
-
+    return mask_pred;
 }
 
 torch::Tensor MaskDINO2::box_postprocess(torch::Tensor out_bbox, int img_h, int img_w) {
-
+    return out_bbox;
 }
 
 
-int main()
-{
-    cout << "\n ========================= Working ========================= \n" << endl;
-    detectron2().boo();
+// int main()
+// {
+//     cout << "\n ========================= Working ========================= \n" << endl;
+//     detectron2().boo();
 
-    return 0;
-}
+//     return 0;
+// }
