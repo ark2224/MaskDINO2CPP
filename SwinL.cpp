@@ -20,8 +20,8 @@ public:
         fc1(in_features, hidden_features), fc2(hidden_features, out_features), drop(d) { }
     torch::Tensor forward(torch::Tensor &);
 private:
-    torch::nn::Linear fc1, fc2;
-    torch::nn::Dropout drop;
+    torch::nn::Linear fc1 = nullptr, fc2 = nullptr;
+    torch::nn::Dropout drop = nullptr;
     torch::nn::GELU act = torch::nn::GELU();
 };
 
@@ -86,9 +86,9 @@ private:
     double qk_scale;
     float attn_drop_ratio;
     float proj_drop_ratio;
-    torch::nn::Linear qkv, proj;
-    torch::nn::Dropout attn_drop, proj_drop;
-    torch::nn::Softmax softmax;
+    torch::nn::Linear qkv = nullptr, proj = nullptr;
+    torch::nn::Dropout attn_drop = nullptr, proj_drop = nullptr;
+    torch::nn::Softmax softmax = nullptr;
 };
 
 void WindowAttention::assemble() {
@@ -190,7 +190,7 @@ private:
     float mlp_ratio, qk_scale, drop, attn_drop, drop_path_ratio;
     bool qkv_bias;
     DropPath drop_path;
-    torch::nn::Identity non_drop_path;
+    torch::nn::Identity non_drop_path = nullptr;
     torch::nn::GELU act_layer = torch::nn::GELU();
     torch::nn::LayerNorm norm1 = nullptr, norm2 = nullptr;
     WindowAttention attn;
@@ -285,7 +285,7 @@ public:
 
 private:
     int dim;
-    torch::nn::Linear reduction;
+    torch::nn::Linear reduction = nullptr;
     torch::nn::LayerNorm norm_layer = nullptr;
 };
 
@@ -458,7 +458,7 @@ public:
     float drop_rate;
     std::vector<int> out_ind, num_heads, num_features;
     PatchEmbed patch_embed;
-    torch::nn::Dropout pos_drop;
+    torch::nn::Dropout pos_drop = nullptr;
 };
 
 SwinTransformer::SwinTransformer(int pis = 224, int patch_size = 4, int in_chans = 3, int ed = 96,
