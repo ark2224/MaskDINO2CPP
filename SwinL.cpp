@@ -13,19 +13,20 @@
 #include "memory.h"
 
 
-class MLP : torch::nn::Module {
+class MLPImpl : torch::nn::Module {
 public:
-    MLP() { } // default constructor for SwinTransformerBlock declaration
-    MLP(int in_features, int hidden_features, int out_features, float d = 0.0) : 
+    MLPImpl() { } // default constructor for SwinTransformerBlock declaration
+    MLPImpl(int in_features, int hidden_features, int out_features, float d = 0.0) : 
         fc1(in_features, hidden_features), fc2(hidden_features, out_features), drop(d) { }
     torch::Tensor forward(torch::Tensor &);
-private:
+
     torch::nn::Linear fc1 = nullptr, fc2 = nullptr;
     torch::nn::Dropout drop = nullptr;
     torch::nn::GELU act = torch::nn::GELU();
 };
+TORCH_MODULE(MLP);
 
-torch::Tensor MLP::forward(torch::Tensor& x) {
+torch::Tensor MLPImpl::forward(torch::Tensor& x) {
     x = fc1(x);
     x = act(x);
     x = drop(x);
@@ -270,7 +271,7 @@ torch::Tensor SwinTransformerBlockImpl::forward(torch::Tensor x, torch::Tensor m
 
     x = shortcut + drop_path.drop_path(x);
     x = norm2(x);
-    x = x + drop_path.drop_path(mlp.forward(x));
+    x = x + drop_path.drop_path(mlp->forward(x));
 
     return x;
 }

@@ -21,7 +21,6 @@ torch::nn::Sequential get_clones(
     bool const& layer_share = false
 ) {
     torch::nn::Sequential ret = torch::nn::Sequential();
-    torch::nn::ModuleDict RET = torch::nn::ModuleDict();
 
     if (layer_share) {
         for (int i = 0; i < num_layers; ++i)
@@ -45,11 +44,11 @@ public:
         : num_layers(num_l), torch::nn::Module()
         { layers = get_clones(encoder_layer, num_layers); }
     // class methods:
-    static torch::Tensor get_reference_points(std::vector<torch::Tensor>&,
+    static torch::Tensor get_reference_points(std::vector< std::pair<int, int> >&,
                                               torch::Tensor&,
                                               torch::Device);
     torch::Tensor forward(torch::Tensor&,
-                          std::vector<torch::Tensor>&,
+                          std::vector< std::pair<int, int> >&,
                           torch::Tensor&,
                           torch::Tensor&,
                           torch::Tensor&,
@@ -61,15 +60,15 @@ private:
 TORCH_MODULE(MSDeformAttnTransformerEncoder);
 
 torch::Tensor MSDeformAttnTransformerEncoderImpl::get_reference_points(
-    std::vector<torch::Tensor>& spatial_shapes,
+    std::vector< std::pair<int, int> >& spatial_shapes,
     torch::Tensor& valid_ratios,
     torch::Device device)
 {
     std::vector<torch::Tensor> reference_points_vector;
     int lvl = 0;
     for (auto const& shape : spatial_shapes) {
-        int H_ = shape.index({0}).item<int>();
-        int W_ = shape.index({1}).item<int>();
+        int H_ = std::get<0>(shape);
+        int W_ = std::get<1>(shape);
 
         std::vector<torch::Tensor> ref_xy = torch::meshgrid({
             torch::linspace(0.5, H_ - 0.5, H_, 
@@ -109,7 +108,7 @@ torch::Tensor MSDeformAttnTransformerEncoderImpl::get_reference_points(
 
 torch::Tensor MSDeformAttnTransformerEncoderImpl::forward(
     torch::Tensor& src,
-    std::vector<torch::Tensor>& spatial_shapes,
+    std::vector<std::pair<int, int>>& spatial_shapes,
     torch::Tensor& level_start_index,
     torch::Tensor& valid_ratios,
     torch::Tensor& pos,
@@ -523,11 +522,12 @@ public:
     std::vector<torch::Tensor> forward(std::vector<torch::Tensor>&,
                                        std::vector<torch::Tensor>&,
                                        std::vector<torch::Tensor>&);
-private:
+
     int d_model;
     int nhead;
     MSDeformAttnTransformerEncoderLayer encoder_layer;
     MSDeformAttnTransformerEncoder encoder;
+    std::vector< std::pair<int, int> > spatial_shapes;
 };
 
 void MSDeformAttnTransformerEncoderOnly::reset_parameters() {
@@ -586,15 +586,13 @@ std::vector<torch::Tensor> MSDeformAttnTransformerEncoderOnly::forward(
     std::vector<torch::Tensor> src_flatten{};
     std::vector<torch::Tensor> mask_flatten{};
     std::vector<torch::Tensor> lvl_pos_embed_flatten{};
-    std::vector<torch::Tensor> spatial_shapes{};
     for (decltype(srcs.size()) i = 0; i < srcs.size(); ++i) {
         torch::Tensor& src = srcs[i];
         torch::Tensor& mask = masks[i];
         torch::Tensor& pos_embed = pos_embeds[i];
         int h = int(src.sizes()[2]);
         int w = int(src.sizes()[3]);
-        torch::Tensor spatial_shape = torch::tensor({h, w});
-        spatial_shapes.push_back(spatial_shape);
+        spatial_shapes.push_back(std::make_pair(h, w));
         src = src.flatten(2).transpose(1,2);
         torch::Tensor lvl_pos_embed = pos_embed + this->named_parameters()["level_embed"][i].view({1, 1, -1});
         lvl_pos_embed_flatten.push_back(lvl_pos_embed);
@@ -614,8 +612,8 @@ std::vector<torch::Tensor> MSDeformAttnTransformerEncoderOnly::forward(
     for (torch::Tensor &m : masks)
         valid_ratios_vector.push_back(m);
     torch::Tensor valid_ratios = torch::stack(valid_ratios_vector, 1);
-    torch::Tensor memory = this->encoder(Src_flatten, spatial_shapes, Level_start_index, valid_ratios, Lvl_pos_embed_flatten, Mask_flatten);
-    return std::vector<torch::Tensor> {memory, Spatial_shapes, Level_start_index};
+    torch::Tensor memory = this->encoder->forward(Src_flatten, spatial_shapes, Level_start_index, valid_ratios, Lvl_pos_embed_flatten, Mask_flatten);
+    return std::vector<torch::Tensor> {memory, Level_start_index};
 }
 
 
@@ -746,11 +744,12 @@ private:
         transformer_feature_strides;
     std::string
         feature_order;
+    int64_t
+        low_resolution_index;
     int
         maskdino_num_feature_levels,
         common_stride,
         transformer_num_feature_levels,
-        low_resolution_index,
         high_resolution_index,
         mask_dim,
         num_fpn_levels,
@@ -965,18 +964,18 @@ std::vector<torch::Tensor> MaskDINO2Encoder::forward_features(
 
     std::vector<torch::Tensor> output = this->transformer.forward(srcs, masks, pos);
     torch::Tensor& y = output[0];
-    torch::Tensor& spatial_shapes = output[1];
-    torch::Tensor& level_start_index = output[2];
+    torch::Tensor& level_start_index = output[1];
+    std::vector<std::pair<int, int> > &spatial_shapes = transformer.spatial_shapes;
     int bs = int(y.sizes()[0]);
     
     std::vector<int64_t> split_size_or_sections{};
     for (int i = 0; i < this->total_num_feature_levels; ++i) {
         if (i < this->total_num_feature_levels - 1) {
-            int val = level_start_index[i+1].data_ptr<int>() - level_start_index[i].data_ptr<int>();
+            int64_t val = level_start_index[i+1].data_ptr<int64_t>() - level_start_index[i].data_ptr<int64_t>();
             split_size_or_sections.push_back(val);
         }
         else {
-            int val = int(y.sizes()[1]) - int(level_start_index[i].data_ptr<int>());
+            int64_t val = int64_t(y.sizes()[1]) - int64_t(level_start_index[i].data_ptr<int64_t>());
             split_size_or_sections.push_back(val);
         }
     }
@@ -985,7 +984,7 @@ std::vector<torch::Tensor> MaskDINO2Encoder::forward_features(
     std::vector<torch::Tensor> out{}, multiscale_features{};
     int num_cur_levels = 0;
     for (decltype(y_vec.size()) i = 0; i < y_vec.size(); ++i) {
-        out.push_back(y_vec[i].transpose(1, 2).view({bs, -1, int(spatial_shapes[i][0].data_ptr<int>()), int(spatial_shapes[i][1].data_ptr<int>())}));
+        out.push_back(y_vec[i].transpose(1, 2).view({bs, -1, std::get<0>(spatial_shapes[i]), std::get<1>(spatial_shapes[i])}));
     }
 
     int idx_int = 0;

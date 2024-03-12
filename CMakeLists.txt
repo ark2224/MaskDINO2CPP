@@ -6,8 +6,14 @@ find_package(Torch REQUIRED)
 include_directories(SYSTEM ${TORCH_INCLUDE_DIRS})
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 
+find_package(CUDAToolkit)
+
+# target_link_libraries(binary_linking_to_cudart PRIVATE CUDA::cudart)
+
 add_executable(MaskDINO2 MaskDINO2.cpp MaskDINO2Encoder.cpp MaskDINO2Decoder.cpp SwinL.cpp main.cpp)
 target_link_libraries(MaskDINO2 "${TORCH_LIBRARIES}")
+target_link_libraries(MaskDINO2 PUBLIC ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+
 set_property(TARGET MaskDINO2 PROPERTY CXX_STANDARD 17)
 # including header files below in the /include directory:
 target_include_directories(MaskDINO2 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

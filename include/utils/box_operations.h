@@ -28,6 +28,6 @@ auto box_iou_pairwise(Boxes &boxes1, Boxes &boxes2) -> float (*)[2];
 float generalized_box_iou_pairwise(Boxes &boxes1, Boxes &boxes2);
 
 
-torch::Tensor masks_to_boxes(BitMasks &masks);
+torch::Tensor masks_to_boxes(torch::Tensor &masks);
 
 #endif
