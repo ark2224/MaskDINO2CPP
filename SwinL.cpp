@@ -204,7 +204,7 @@ SwinTransformerBlockImpl::SwinTransformerBlockImpl(int d, int nh, int ws = 7, in
                                            dim(d), num_heads(nh), window_size(ws), shift_size(ss), mlp_ratio(mr),
                                            qk_scale(qks), drop(dr), attn_drop(ad), drop_path_ratio(dp), qkv_bias(qkvb)
 {
-    norm1 = register_module("norm1", torch::nn::LayerNorm(dim));
+    norm1 = register_module("norm1", torch::nn::LayerNorm(torch::nn::LayerNormOptions({dim})));
     attn = WindowAttention(dim,
                             std::vector<int> {window_size},
                             num_heads,
@@ -216,7 +216,7 @@ SwinTransformerBlockImpl::SwinTransformerBlockImpl(int d, int nh, int ws = 7, in
         drop_path = DropPath(dp);
     else
         non_drop_path = register_module("drop_path", torch::nn::Identity());
-    norm2 = register_module("norm2", torch::nn::LayerNorm(dim));
+    norm2 = register_module("norm2", torch::nn::LayerNorm(torch::nn::LayerNormOptions({dim})));
     int mlp_hidden_dim = int(dim * mlp_ratio);
     mlp = MLP(dim, mlp_hidden_dim, dim, drop);
 
@@ -280,7 +280,7 @@ torch::Tensor SwinTransformerBlockImpl::forward(torch::Tensor x, torch::Tensor m
 class PatchMerging : torch::nn::Module {
 public:
     PatchMerging(int d) : dim(d), reduction(4*d, 2*d, true), //took out norm_layer parameter bc it seemed pointless
-                          norm_layer(torch::nn::LayerNorm(4*d))  {  }
+                          norm_layer(torch::nn::LayerNorm(torch::nn::LayerNormOptions({int(4*d)})))  {  }
     
     torch::Tensor forward(torch::Tensor&, int&, int&);
 
@@ -407,7 +407,7 @@ public:
             patch_size(ps), in_chan(ic), embed_dim(ed), has_norm(has_norm) { 
         proj = register_module("proj", torch::nn::Conv2d(torch::nn::Conv2dOptions(in_chan, embed_dim, patch_size).stride(patch_size)));
         if (has_norm)
-            norm = register_module("norm", torch::nn::LayerNorm(ed));
+            norm = register_module("norm", torch::nn::LayerNorm(torch::nn::LayerNormOptions({ed})));
     }
     torch::Tensor forward(torch::Tensor);
 
@@ -416,7 +416,7 @@ private:
     int in_chan;
     int embed_dim;
     bool has_norm;
-    torch::nn::Conv2d proj;
+    torch::nn::Conv2d proj = nullptr;
     torch::nn::LayerNorm norm = nullptr;
 };
 
@@ -513,7 +513,7 @@ SwinTransformer::SwinTransformer(int pis = 224, int patch_size = 4, int in_chans
         num_features.push_back(int(embed_dim * pow(2, i)));
     
     for (auto& i_layer : out_ind) {
-        torch::nn::LayerNorm layer = torch::nn::LayerNorm(num_features[i_layer]);
+        torch::nn::LayerNorm layer = torch::nn::LayerNorm(torch::nn::LayerNormOptions({num_features[i_layer]}));
         register_module("norm" + i_layer, layer);
     }
     freeze_stages();
@@ -568,7 +568,7 @@ std::unordered_map<std::string, torch::Tensor> SwinTransformer::forward(torch::T
         
         if (std::find(out_ind.begin(), out_ind.end(), i) != out_ind.end()) {
             auto &norm_layer = named_modules()["norm" + i];
-            x = static_cast<torch::nn::LayerNorm>(norm_layer)(x);
+            x = static_cast<torch::nn::LayerNorm>(norm_layer)->forward(x);
             torch::Tensor out = x.view({-1, Wh, Ww, num_features[i]}).permute({0, 3, 1, 2}).contiguous();
             outs.insert({"res" + i + 2, out});
         }
@@ -634,9 +634,3 @@ std::unordered_map<std::string, ShapeSpec> D2SwinTransformer::output_shape() {
     }
     return ret;
 }
-
-
-/* change:
-    - classes to structs
-    - refs in method parameters
-*/ 

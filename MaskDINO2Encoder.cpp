@@ -10,9 +10,9 @@
 #include "criterion.h"
 #include "include/structures/image_list.h"
 #include "memory.h"
-#include "include/ms_deform_attn_cuda/ms_deform_attn_cuda.cu"
-#include "include/ms_deform_attn_cuda/ms_deform_im2col_cuda.cuh"
-#include "include/ms_deform_attn_cuda/ms_deform_attn_cuda.h"
+// #include "include/ms_deform_attn_cuda/ms_deform_attn_cuda.cu"
+// #include "include/ms_deform_attn_cuda/ms_deform_im2col_cuda.cuh"
+// #include "include/ms_deform_attn_cuda/ms_deform_attn_cuda.h"
 
 
 torch::nn::Sequential get_clones(
