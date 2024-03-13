@@ -1,171 +1,31 @@
 ﻿#include <iostream>
-#include <torch/torch.h>
-#include <math.h>
 #include <limits>
+#include <math.h>
+#include <torch/torch.h>
 #include "backbone.h"
 #include "matcher.h"
-#include "SemanticSegmentor.h"
-#include "criterion.h"
-#include "include/structures/image_list.h"
 #include "memory.h"
-#include "SwinL.cpp"
-#include "include/utils/box_operations.h"
-#include "MaskDINO2Encoder.cpp"
-
-
-torch::Tensor gen_sineembed_for_position(torch::Tensor pos_tensor) {
-    double scale = 2 * M_PI;
-    torch::Tensor dim_t = torch::arange(128, torch::TensorOptions().dtype(torch::kFloat32).device(pos_tensor.device()));
-    dim_t = pow(10000, 2 * (floor_divide(dim_t, 2)) / 128);
-    torch::Tensor x_embed = pos_tensor.index({torch::indexing::Slice(),
-                                              torch::indexing::Slice(),
-                                              0})
-                            * scale;
-    torch::Tensor y_embed = pos_tensor.index({torch::indexing::Slice(),
-                                              torch::indexing::Slice(),
-                                              1})
-                            * scale;
-    torch::Tensor pos_x = x_embed.index({torch::indexing::Slice(),
-                                         torch::indexing::Slice(),
-                                         torch::indexing::None})
-                          / dim_t;
-    torch::Tensor pos_y = y_embed.index({torch::indexing::Slice(),
-                                         torch::indexing::Slice(),
-                                         torch::indexing::None})
-                          / dim_t;
-    pos_x = torch::stack((pos_x.index({torch::indexing::Slice(),
-                                       torch::indexing::Slice(),
-                                       torch::indexing::Slice(0, torch::indexing::None, 2)
-                                       }).sin(),
-                          pos_x.index({torch::indexing::Slice(),
-                                       torch::indexing::Slice(),
-                                       torch::indexing::Slice(1, torch::indexing::None, 2)
-                                       }).cos()),
-                          3).flatten(2);
-    pos_y = torch::stack((pos_y.index({torch::indexing::Slice(),
-                                       torch::indexing::Slice(),
-                                       torch::indexing::Slice(0, torch::indexing::None, 2)
-                                       }).sin(),
-                          pos_y.index({torch::indexing::Slice(),
-                                       torch::indexing::Slice(),
-                                       torch::indexing::Slice(1, torch::indexing::None, 2)
-                                       }).cos()),
-                          3).flatten(2);
-    torch::Tensor pos;
-    if (pos_tensor.sizes()[-1] == 2)
-        pos = torch::cat((pos_y, pos_x), 2);
-    else if (pos_tensor.sizes()[-1] == 4) {
-        torch::Tensor w_embed = pos_tensor.index({torch::indexing::Slice(),
-                                                  torch::indexing::Slice(),
-                                                  2})
-                                * scale;
-        torch::Tensor pos_w = w_embed.index({torch::indexing::Slice(),
-                                             torch::indexing::Slice(),
-                                             torch::indexing::None})
-                              / dim_t;
-        pos_w = torch::stack((pos_w.index({torch::indexing::Slice(),
-                                           torch::indexing::Slice(),
-                                           torch::indexing::Slice(0, torch::indexing::None, 2)}).sin(),
-                              pos_w.index({torch::indexing::Slice(),
-                                           torch::indexing::Slice(),
-                                           torch::indexing::Slice(1, torch::indexing::None, 2)}).cos()),
-                              3).flatten(2);
-        torch::Tensor h_embed = pos_tensor.index({torch::indexing::Slice(),
-                                                  torch::indexing::Slice(),
-                                                  3})
-                                * scale;
-        torch::Tensor pos_h = h_embed.index({torch::indexing::Slice(),
-                                             torch::indexing::Slice(),
-                                             torch::indexing::None})
-                              / dim_t;
-        pos_h = torch::stack((pos_h.index({torch::indexing::Slice(),
-                                           torch::indexing::Slice(),
-                                           torch::indexing::Slice(0, torch::indexing::None, 2)}).sin(),
-                              pos_h.index({torch::indexing::Slice(),
-                                           torch::indexing::Slice(),
-                                           torch::indexing::Slice(1, torch::indexing::None, 2)}).cos()),
-                              3).flatten(2);
-        torch::Tensor pos = torch::cat((pos_y, pos_x, pos_w, pos_h), 2);
-    }
-    else
-        std::cerr << "Unknown pos_tensor shape(-1): " << pos_tensor.sizes()[-1];
-    
-    return pos;
-}
-
-
-torch::Tensor inverse_sigmoid(torch::Tensor x, double eps = 1e-5) {
-    x = x.clamp(0, 1);
-    torch::Tensor x1 = x.clamp(eps);
-    torch::Tensor x2 = (1 - x).clamp(eps);
-    return torch::log(x1 / x2);
-}
-
-
-std::vector<torch::Tensor> gen_encoder_output_proposals(torch::Tensor& memory, torch::Tensor& memory_padding_mask, std::vector< std::pair<int, int> >& spatial_shapes) {
-    int N_ = (int)memory.sizes()[0];
-    int S_ = (int)memory.sizes()[1];
-    int C_ = (int)memory.sizes()[2];
-    float base_scale = 4.0;
-    std::vector<torch::Tensor> proposals{};
-    int _cur = 0, idx = 0;
-    for (auto& shape : spatial_shapes) {
-        int H_ = shape.first; 
-        int W_ = shape.second;
-        torch::Tensor mask_flatten_ = memory_padding_mask.index(
-                                          {torch::indexing::Slice(),
-                                          torch::indexing::Slice(_cur, _cur + H_ + W_)}
-                                      ).view({N_, H_, W_, 1});
-        torch::Tensor valid_H = torch::sum(~mask_flatten_.index({torch::indexing::Slice(),
-                                                                 torch::indexing::Slice(),
-                                                                 0,
-                                                                 0}),
-                                           1);
-        torch::Tensor valid_W = torch::sum(~mask_flatten_.index({torch::indexing::Slice(),
-                                                                 0,
-                                                                 torch::indexing::Slice(),
-                                                                 0}),
-                                           1);
-        std::vector<torch::Tensor> grids_xy = torch::meshgrid(
-            {torch::linspace(0, H_ - 1, H_, torch::TensorOptions().dtype(torch::kFloat32).device(memory.device())),
-            torch::linspace(0, W_ - 1, W_, torch::TensorOptions().dtype(torch::kFloat32).device(memory.device()))}
-        );
-        torch::Tensor grid_x = grids_xy[1],
-                      grid_y = grids_xy[0];
-        torch::Tensor grid = torch::cat({grid_x.unsqueeze(-1), grid_y.unsqueeze(-1)}, -1);
-
-        torch::Tensor scale = torch::cat({valid_W.unsqueeze(-1), valid_H.unsqueeze(-1)}, 1).view({N_, 1, 1, 2});
-        grid = (grid.unsqueeze(0).expand({N_, -1, -1, -1}) + 0.5) / scale;
-        torch::Tensor wh = torch::ones_like(grid) * 0.05 * (pow(2.0, idx));
-        torch::Tensor proposal = torch::cat({grid, wh}, -1).view({N_, -1, 4});
-        proposals.push_back(proposal);
-        _cur += H_ * W_;
-        ++idx;
-    }
-    torch::Tensor output_proposals = torch::cat(proposals, 1);
-    torch::Tensor output_proposals_valid = torch::logical_and((output_proposals > 0.01), (output_proposals < 0.99)).all(-1, true);
-    output_proposals = torch::log(output_proposals / (1 - output_proposals));
-    output_proposals = output_proposals.masked_fill(memory_padding_mask.unsqueeze(-1), std::numeric_limits<float>::infinity());
-    output_proposals = output_proposals.masked_fill(~output_proposals_valid, std::numeric_limits<float>::infinity());
-
-    torch::Tensor output_memory = memory;
-    output_memory = output_memory.masked_fill(memory_padding_mask.unsqueeze(-1), float(0));
-    output_memory = output_memory.masked_fill(~output_proposals_valid, float(0));
-    return std::vector<torch::Tensor> {output_memory, output_proposals};
-}
+#include "output/output_util.h"
+#include "structures/bitmasks.h"
+#include "utils/box_operations.h"
+#include "utils/modules.h"
+#include "MaskDINO2Encoder.h"
 
 
 class DeformableTransformerDecoderLayerImpl : torch::nn::Module {
+/*
+    Single layer class for Decoder
+*/
 public:
     DeformableTransformerDecoderLayerImpl() : torch::nn::Module() { }
     DeformableTransformerDecoderLayerImpl(int,
-                                      int,
-                                      float,
-                                      std::string,
-                                      int,
-                                      int,
-                                      int,
-                                      std::string);
+                                          int,
+                                          float,
+                                          std::string,
+                                          int,
+                                          int,
+                                          int,
+                                          std::string);
     // class methods:
     static torch::Tensor with_pos_embed(torch::Tensor x, torch::Tensor pos) 
     {
@@ -198,22 +58,22 @@ private:
         dropout;
     MSDeformAttn
         cross_attn;
-    torch::nn::MultiheadAttention*
-        self_attn = nullptr;
+    torch::nn::MultiheadAttention
+        *self_attn = nullptr;
     torch::nn::Dropout
-        dropout1,
-        dropout2,
-        dropout3,
-        dropout4;
+        dropout1 = nullptr,
+        dropout2 = nullptr,
+        dropout3 = nullptr,
+        dropout4 = nullptr;
     torch::nn::LayerNorm
-        norm1,
-        norm2,
-        norm3;
+        norm1 = nullptr,
+        norm2 = nullptr,
+        norm3 = nullptr;
     torch::nn::Linear 
-        linear1,
-        linear2;
+        linear1 = nullptr,
+        linear2 = nullptr;
     torch::nn::Sequential
-        activation_layer;
+        activation_layer = nullptr;
     std::string
         key_aware_type;
 
@@ -233,11 +93,11 @@ DeformableTransformerDecoderLayerImpl::DeformableTransformerDecoderLayerImpl(
 {
     this->cross_attn = MSDeformAttn(d_model, n_levels, n_heads, n_points);
     dropout1 = torch::nn::Dropout(dropout);
-    norm1 = torch::nn::LayerNorm(d_model);
+    norm1 = torch::nn::LayerNorm(torch::nn::LayerNormOptions({d_model}));
 
-    self_attn = &torch::nn::MultiheadAttention(d_model, n_heads, dropout);
+    self_attn = &torch::nn::MultiheadAttention(torch::nn::MultiheadAttentionOptions(d_model, n_heads).dropout(dropout));
     dropout2 = torch::nn::Dropout(dropout);
-    norm2 = torch::nn::LayerNorm(d_model);
+    norm2 = torch::nn::LayerNorm(torch::nn::LayerNormOptions({d_model}));
 
     linear1 = torch::nn::Linear(d_model, d_ffn);
     if (!activation.compare("relu"))
@@ -253,7 +113,7 @@ DeformableTransformerDecoderLayerImpl::DeformableTransformerDecoderLayerImpl(
     dropout3 = torch::nn::Dropout(dropout);
     linear2 = torch::nn::Linear(d_ffn, d_model);
     dropout4 = torch::nn::Dropout(dropout);
-    norm3 = torch::nn::LayerNorm(d_model);
+    norm3 = torch::nn::LayerNorm(torch::nn::LayerNormOptions({d_model}));
 }
 
 
@@ -279,6 +139,10 @@ torch::Tensor DeformableTransformerDecoderLayerImpl::forward(
     torch::Tensor self_attn_mask = torch::Tensor(),
     torch::Tensor cross_attn_mask = torch::Tensor())
 {
+/*
+    Input:
+        - tgt/tgt_query_pos: nq, bs, d_model
+*/
     torch::Tensor tgt2;
     if (self_attn != nullptr) {
         torch::Tensor q, k;
@@ -314,7 +178,8 @@ torch::Tensor DeformableTransformerDecoderLayerImpl::forward(
 }
 
 
-torch::nn::Sequential _get_clones(DeformableTransformerDecoderLayer module, int N) { // overloaded of MaskDINO2Encoder::get_clones
+torch::nn::Sequential _get_clones(DeformableTransformerDecoderLayer module, int N) {
+// overloaded of method ./utils/modules.h get_clones to take in custom submodule
     torch::nn::Sequential ret = {};
     for (int i = 0; i < N; ++N)
         ret->push_back(module);
@@ -360,7 +225,7 @@ public:
     std::vector<float>
         dec_layer_dropout_prob;
     torch::nn::LayerNorm
-        norm;
+        norm = nullptr;
     bool 
         return_intermediate,
         modulate_attention,
@@ -373,42 +238,53 @@ public:
     std::vector<DeformableTransformerDecoderLayer>
         decoder_layer_number;
     torch::nn::Sequential
-        layers,
-        bbox_embed;
+        layers = nullptr,
+        bbox_embed = nullptr;
 };
 
-TransformerDecoder::TransformerDecoder(DeformableTransformerDecoderLayer& decoder_layer,
-                                       int& num_layers,
-                                       torch::nn::LayerNorm& norm,
-                                       bool return_intermediate = false,
-                                       int d_model = 256,
-                                       int query_dim = 4,
-                                       bool modulate_hw_attn = true,
-                                       int num_feature_levels = 1,
-                                       bool deformable_decoder = true,
-                                       std::vector<DeformableTransformerDecoderLayer> dec_layer_num = {},
-                                       bool rm_dec_query_scale = true,
-                                    //    bool dec_layer_share = false,
-                                       std::vector<float> dec_layer_dropout_prob = {}) :
-torch::nn::Module(), num_layers(num_layers), norm(norm), return_intermediate(return_intermediate),
-query_dim(query_dim), num_feature_levels(num_feature_levels), d_model(d_model),
-modulate_attention(modulate_hw_attn), deformable_decoder(deformable_decoder),
-decoder_layer_number(dec_layer_num), dec_layer_dropout_prob(dec_layer_dropout_prob)
+TransformerDecoder::TransformerDecoder(
+    DeformableTransformerDecoderLayer& decoder_layer,
+    int& num_layers,
+    torch::nn::LayerNorm& norm,
+    bool return_intermediate = false,
+    int d_model = 256,
+    int query_dim = 4,
+    bool modulate_hw_attn = true,
+    int num_feature_levels = 1,
+    bool deformable_decoder = true,
+    std::vector<DeformableTransformerDecoderLayer> dec_layer_num = {},
+    bool rm_dec_query_scale = true,
+    std::vector<float> dec_layer_dropout_prob = {}
+) : torch::nn::Module(),
+    num_layers(num_layers),
+    norm(norm),
+    return_intermediate(return_intermediate),
+    query_dim(query_dim),
+    num_feature_levels(num_feature_levels),
+    d_model(d_model),
+    modulate_attention(modulate_hw_attn),
+    deformable_decoder(deformable_decoder),
+    decoder_layer_number(dec_layer_num),
+    dec_layer_dropout_prob(dec_layer_dropout_prob)
 {
     if (num_layers > 0) {
         layers = _get_clones(decoder_layer, num_layers);
         register_module("layers", layers);
-    } else
+    } else {
         layers = {};
+    }
     assert(return_intermediate);
     ref_point_head = &MLPImpl(int(query_dim / 2) * d_model, d_model, d_model, 2);
-    if (!deformable_decoder)
+    if (!deformable_decoder) {
         query_pos_sine_scale = &MLPImpl(d_model, d_model, d_model, 2);
-    if (!rm_dec_query_scale)
+    }
+    if (!rm_dec_query_scale) {
         std::cerr << "Need to implement.";
         query_scale = &MLPImpl(d_model, d_model, d_model, 2);
-    if (!deformable_decoder && modulate_hw_attn)
+    }
+    if (!deformable_decoder && modulate_hw_attn) {
         ref_anchor_head = &MLPImpl(d_model, d_model, 2, 2);
+    }
     if (!dec_layer_num.empty()) {
         assert(typeid(dec_layer_num).name() == "std::vector<DeformableTransformerDecoderLayer>");
         assert(dec_layer_num.size() == num_layers);
@@ -416,8 +292,9 @@ decoder_layer_number(dec_layer_num), dec_layer_dropout_prob(dec_layer_dropout_pr
     if (!dec_layer_dropout_prob.empty()) {
         assert(typeid(dec_layer_dropout_prob).name() == "std::vector<float>");
         assert(dec_layer_dropout_prob.size() == num_layers);
-        for (auto& prob : dec_layer_dropout_prob)
+        for (auto& prob : dec_layer_dropout_prob) {
             assert(prob >= 0.0 && prob <= 1.0);
+        }
     }
 
     reset_parameters();
@@ -435,8 +312,17 @@ std::vector< std::vector<torch::Tensor> > TransformerDecoder::forward(
     torch::Tensor refpoints_unsigmoid = torch::Tensor(),
     torch::Tensor level_start_index = torch::Tensor(),
     torch::Tensor spatial_shapes = torch::Tensor(),
-    torch::Tensor valid_ratios = torch::Tensor()) 
+    torch::Tensor valid_ratios = torch::Tensor()
+) 
 {
+/*
+    Input:
+        - tgt: nq, bs, d_model
+        - memory: hw, bs, d_model
+        - pos: hw, bs, d_model
+        - refpoints_unsigmoid: nq, bs, 2/4
+        - valid_ratios/spatial_shapes: bs, nlevel, 2
+*/
     torch::Tensor output = tgt;
     torch::Device device = tgt.device();
     std::vector<torch::Tensor> intermediate{};
@@ -578,21 +464,21 @@ private:
         initialize_box_type,
         dn;
     torch::nn::Sequential
-        input_proj,
-        bbox_embed;
+        input_proj = nullptr,
+        bbox_embed = nullptr;
     torch::nn::Embedding
-        query_feat,
-        query_embed,
-        label_enc;
-    MLPImpl
+        query_feat = nullptr,
+        query_embed = nullptr,
+        label_enc = nullptr;
+    MLP
         mask_embed,
         _bbox_embed;
     torch::nn::Linear
-        class_embed,
-        enc_output;
+        class_embed = nullptr,
+        enc_output = nullptr;
     torch::nn::LayerNorm
-        enc_output_norm,
-        decoder_norm;
+        enc_output_norm = nullptr,
+        decoder_norm = nullptr;
     TransformerDecoder
         decoder;
     std::unordered_map<std::string, torch::Tensor>
@@ -644,7 +530,7 @@ semantic_ce_loss(semantic_ce_loss),
 num_classes(num_classes),
 hidden_dim(hidden_dim)
 {
-    /*NOTE: this interface is experimental.
+/*
     Args:
         in_channels: channels of the input features
         mask_classification: whether to add mask classifier or not
@@ -667,14 +553,15 @@ hidden_dim(hidden_dim)
         return_intermediate_dec: return the intermediate results of decoder
         query_dim: 4 -> (x, y, w, h)
         dec_layer_share: whether to share each decoder layer
-        semantic_ce_loss: use ce loss for semantic segmentation*/
+        semantic_ce_loss: use ce loss for semantic segmentation
+*/
     if (!two_stage || learn_tgt)
         query_feat = this->register_module("query_feat", torch::nn::Embedding(num_queries, hidden_dim));
     if (!two_stage && initialize_box_type.empty())
         query_embed = this->register_module("query_embed", torch::nn::Embedding(num_queries, 4));
     if (two_stage) {
         enc_output = this->register_module("enc_output", torch::nn::Linear(hidden_dim, hidden_dim));
-        enc_output_norm = this->register_module("enc_output_norm", torch::nn::LayerNorm(hidden_dim));
+        enc_output_norm = this->register_module("enc_output_norm", torch::nn::LayerNorm(torch::nn::LayerNormOptions({hidden_dim})));
     }
     input_proj = torch::nn::Sequential();
     for (int i = 0; i < num_feature_levels; ++i) {
@@ -694,7 +581,7 @@ hidden_dim(hidden_dim)
     this->register_module("label_enc", torch::nn::Embedding(num_classes, hidden_dim));
     this->register_module("mask_embed", MLP(hidden_dim, hidden_dim, mask_dim, 3));
 
-    this->register_module("decoder_norm", torch::nn::LayerNorm(hidden_dim));
+    this->register_module("decoder_norm", torch::nn::LayerNorm(torch::nn::LayerNormOptions({hidden_dim})));
     DeformableTransformerDecoderLayer decoder_layer = DeformableTransformerDecoderLayer(hidden_dim,
                                                                                         dim_feedforward,
                                                                                         dropout,
@@ -710,13 +597,16 @@ hidden_dim(hidden_dim)
                                                     query_dim,
                                                     num_feature_levels,
                                                     dec_layer_share);
-    _bbox_embed = MLPImpl(hidden_dim, hidden_dim, 4, 3);
-    torch::nn::init::constant_(_bbox_embed.fc2->weight.data(), 0);
-    torch::nn::init::constant_(_bbox_embed.fc2->bias.data(), 0);
-    std::vector<MLPImpl> box_embed_layerlist{};
-    for (int i = 0; i < num_layers; ++i)
-        box_embed_layerlist.push_back(_bbox_embed);
-    bbox_embed = torch::nn::Sequential(box_embed_layerlist);
+    torch::nn::Sequential bbox_embed = {};
+    // torch::nn::ModuleDict bbox_dict = {};
+    for (int i = 0; i < num_layers; ++i) {
+
+        MLP new_bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3);
+        torch::nn::init::constant_(new_bbox_embed->fc2->weight.data(), 0);
+        torch::nn::init::constant_(new_bbox_embed->fc2->bias.data(), 0);
+        // bbox_dict["mlp" + i] = _bbox_embed.ptr();
+        bbox_embed->push_back(new_bbox_embed);
+    }
     decoder.bbox_embed = bbox_embed;
 }
 
@@ -725,6 +615,15 @@ std::vector<torch::Tensor> MaskDINO2Decoder::prepare_for_dn(std::vector< std::un
                                                             torch::Tensor& refpoint_emb,
                                                             int batch_size)
 {
+/*
+    modified from dn-detr. You can refer to dn-detr
+    https://github.com/IDEA-Research/DN-DETR/blob/main/models/dn_dab_deformable_detr/dn_components.py
+    for more details
+        :param dn_args: scalar, noise_scale
+        :param tgt: original tgt (content) in the matching part
+        :param refpoint_emb: positional anchor queries in the matching part
+        :param batch_size: bs
+*/
     torch::Tensor input_query_label = torch::Tensor();
     torch::Tensor input_query_bbox = torch::Tensor();
     torch::Tensor attn_mask = torch::Tensor();
@@ -749,7 +648,7 @@ std::vector<torch::Tensor> MaskDINO2Decoder::prepare_for_dn(std::vector< std::un
         else
             scalar = 0;
         if (scalar == 0) {
-            mask_dict_inclass = mask_dict; // saving locally as to return different objects     
+            mask_dict_inclass = mask_dict; // saving locally to return different objects     
             return std::vector<torch::Tensor> {input_query_label, input_query_bbox, attn_mask};
         }
 
@@ -865,11 +764,17 @@ std::vector<torch::Tensor> MaskDINO2Decoder::prepare_for_dn(std::vector< std::un
     return std::vector<torch::Tensor> {input_query_label, input_query_bbox, attn_mask};
 }
 
-std::vector<torch::Tensor> MaskDINO2Decoder::dn_post_process(torch::Tensor& outputs_class,
-                              torch::Tensor& outputs_coords,
-                              std::unordered_map<std::string, torch::Tensor>& mask_dict,
-                              torch::Tensor& outputs_mask)
+std::vector<torch::Tensor> MaskDINO2Decoder::dn_post_process(
+    torch::Tensor& outputs_class,
+    torch::Tensor& outputs_coords,
+    std::unordered_map<std::string, torch::Tensor>& mask_dict,
+    torch::Tensor& outputs_mask
+)
 {
+/*
+    post process of dn after output from the transformer
+    put the dn part in the mask_dict
+*/
     assert(mask_dict["pad_size"].item<int>() > 0);
     int pad_size = mask_dict["pad_size"].item<int>();
     torch::Tensor output_known_class = outputs_class.index({torch::indexing::Slice(),
@@ -936,6 +841,11 @@ torch::Tensor MaskDINO2Decoder::pred_box(std::vector<torch::Tensor>& reference,
                                          std::vector<torch::Tensor>& hs,
                                          torch::Tensor ref0 = torch::Tensor())
 {
+/*
+    :param reference: reference box coordinates from each decoder layer
+    :param hs: content
+    :param ref0: whether there are prediction from the first layer
+*/
     torch::Device device = reference[0].device();
     
     std::vector<torch::Tensor> outputs_coord_list{};
@@ -959,8 +869,16 @@ std::unordered_map<std::string, torch::Tensor> MaskDINO2Decoder::forward(
     std::vector<torch::Tensor>& x,
     torch::Tensor& mask_features,
     std::vector<torch::Tensor>& masks,
-    std::vector< std::unordered_map<std::string, torch::Tensor> >& targets)
+    std::vector< std::unordered_map<std::string, torch::Tensor> >& targets
+)
 {
+/*
+    :param x: input, a list of multi-scale feature
+    :param mask_features: is the per-pixel embeddings with resolution 1/4 of the original image,
+    obtained by fusing backbone encoder encoded features. This is used to produce binary masks.
+    :param masks: mask in the original image
+    :param targets: used for denoising training
+*/
     assert(int(x.size()) == num_feature_levels);
     torch::Device device = x[0].device();
     bool enable_mask = false;
@@ -977,7 +895,7 @@ std::unordered_map<std::string, torch::Tensor> MaskDINO2Decoder::forward(
                                          torch::TensorOptions().device(src.device()).dtype(torch::kBool)));
     }
 
-    std::vector< std::pair<int, int> > size_list{}, spatial_shapes{};
+    std::vector< std::pair<int64_t, int64_t> > size_list{}, spatial_shapes{};
     std::vector<torch::Tensor> src_flatten{}, mask_flatten{};
     int i = 0, bs;
     for (auto module = input_proj->begin(); module != input_proj->end(); ++module) {
@@ -1015,7 +933,7 @@ std::unordered_map<std::string, torch::Tensor> MaskDINO2Decoder::forward(
         torch::Tensor output_memory = geop[0], output_proposals = geop[1];
         output_memory = enc_output_norm(enc_output(output_memory));
         torch::Tensor enc_outputs_class_unselected = class_embed(output_memory);
-        enc_outputs_class_unselected = this->_bbox_embed.forward(output_memory) + output_proposals;
+        enc_outputs_class_unselected = this->_bbox_embed->forward(output_memory) + output_proposals;
         int topk = num_queries;
         torch::Tensor topk_proposals = std::get<1>(torch::topk(std::get<0>(enc_outputs_class_unselected.max(-1)), topk, 1));
         torch::Tensor refpoint_embed_undetach = torch::gather(enc_outputs_class_unselected, 1, topk_proposals.unsqueeze(-1).repeat({1, 1, 4}));
@@ -1059,7 +977,6 @@ std::unordered_map<std::string, torch::Tensor> MaskDINO2Decoder::forward(
         refpoint_embed = tgt;
     }
     torch::Tensor tgt_mask = torch::Tensor();
-    // torch::Tensor mask_dict = torch::Tensor();
     if (this->dn != "no" && this->is_training()) {
         assert(!targets.empty());
         torch::Tensor empty_tensor1 = torch::Tensor(), empty_tensor2 = torch::Tensor();
@@ -1174,7 +1091,7 @@ std::vector<torch::Tensor> MaskDINO2Decoder::forward_prediction_heads(
     torch::Tensor outputs_class = this->class_embed(decoder_output);
     torch::Tensor outputs_mask{};
     if (pred_mask) {
-        torch::Tensor mask_embed_tensor = mask_embed.forward(decoder_output);
+        torch::Tensor mask_embed_tensor = mask_embed->forward(decoder_output);
         outputs_mask = torch::einsum("bqc,bchw->bqhw", {mask_embed_tensor, mask_features});
     }
 
@@ -1184,8 +1101,12 @@ std::vector<torch::Tensor> MaskDINO2Decoder::forward_prediction_heads(
 std::unordered_map<std::string, torch::Tensor> MaskDINO2Decoder::_set_aux_loss(
     torch::Tensor& outputs_class,
     torch::Tensor& outputs_seg_masks,
-    torch::Tensor out_boxes = torch::Tensor())
+    torch::Tensor out_boxes = torch::Tensor()
+)
 {
+/*
+    Custom function similar to torchscript function
+*/
     std::unordered_map<std::string, torch::Tensor> ret;
     torch::Tensor oc = outputs_class.index({torch::indexing::Slice(torch::indexing::None, -1)});
     torch::Tensor osm = outputs_seg_masks.index({torch::indexing::Slice(torch::indexing::None, -1)});

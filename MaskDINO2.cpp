@@ -2,7 +2,6 @@
 #include <torch/torch.h>
 #include "backbone.h"
 #include "matcher.h"
-#include "SemanticSegmentor.h"
 #include "criterion.h"
 #include "include/structures/image_list.h"
 #include "memory.h"

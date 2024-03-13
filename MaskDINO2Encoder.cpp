@@ -1,41 +1,24 @@
 ﻿#include <array>
 #include <cassert>
 #include <iostream>
-#include <torch/torch.h>
 #include <math.h>
+#include <torch/torch.h>
 #include <vector>
 #include "backbone.h"
+#include "detectron2.h"
+#include "utils/modules.h"
+#include "utils/position_encoding.h"
 #include "matcher.h"
-#include "SemanticSegmentor.h"
-#include "criterion.h"
-#include "include/structures/image_list.h"
 #include "memory.h"
-// #include "include/ms_deform_attn_cuda/ms_deform_attn_cuda.cu"
-// #include "include/ms_deform_attn_cuda/ms_deform_im2col_cuda.cuh"
-// #include "include/ms_deform_attn_cuda/ms_deform_attn_cuda.h"
-
-
-torch::nn::Sequential get_clones(
-    torch::nn::AnyModule& module,
-    int const& num_layers,
-    bool const& layer_share = false
-) {
-    torch::nn::Sequential ret = torch::nn::Sequential();
-
-    if (layer_share) {
-        for (int i = 0; i < num_layers; ++i)
-            ret->push_back(module);
-        return ret;
-    }
-    else {
-        for (int i = 0; i < num_layers; ++i)
-            ret->push_back(module.clone());
-        return ret;
-    }
-}
+// #include "ms_deform_attn_cuda/ms_deform_attn_cuda.cu"
+// #include "ms_deform_attn_cuda/ms_deform_im2col_cuda.cuh"
+// #include "ms_deform_attn_cuda/ms_deform_attn_cuda.h"
 
 
 class MSDeformAttnTransformerEncoderImpl : torch::nn::Module {
+/*
+    MSDeformAttn Transformer encoder in deformable detr
+*/
 public:
     //default constructor for initialization of classes later in this file
     MSDeformAttnTransformerEncoderImpl() {  }
@@ -54,8 +37,10 @@ public:
                           torch::Tensor&,
                           torch::Tensor&);
 private:
-    torch::nn::Sequential layers = nullptr;
-    int num_layers;
+    torch::nn::Sequential
+        layers = nullptr;
+    int
+        num_layers;
 };
 TORCH_MODULE(MSDeformAttnTransformerEncoder);
 
@@ -112,7 +97,8 @@ torch::Tensor MSDeformAttnTransformerEncoderImpl::forward(
     torch::Tensor& level_start_index,
     torch::Tensor& valid_ratios,
     torch::Tensor& pos,
-    torch::Tensor& padding_mask)
+    torch::Tensor& padding_mask
+)
 {
     torch::Tensor output = src;
     torch::Tensor reference_points = get_reference_points(spatial_shapes,
@@ -140,12 +126,14 @@ public:
     static std::vector<int> backward(torch::Tensor&);
 };
 
-torch::Tensor MSDeformAttnFunction::forward(torch::Tensor& value,
-                                            torch::Tensor& input_spatial_shapes,
-                                            torch::Tensor& input_level_start_index,
-                                            torch::Tensor& sampling_locations,
-                                            torch::Tensor& attention_weights_tensor,
-                                            int& im2col_step)
+torch::Tensor MSDeformAttnFunction::forward(
+    torch::Tensor& value,
+    torch::Tensor& input_spatial_shapes,
+    torch::Tensor& input_level_start_index,
+    torch::Tensor& sampling_locations,
+    torch::Tensor& attention_weights_tensor,
+    int& im2col_step
+)
 {
     // can download ms_deform_attn_cuda_forward and save_for_backward from:
     // https://github.com/fundamentalvision/Deformable-DETR/blob/main/models/ops/src/cuda/ms_deform_attn_cuda.h
@@ -201,6 +189,13 @@ torch::Tensor ms_deform_attn_core_pytorch(torch::Tensor& value,
 
 
 class MSDeformAttnImpl : torch::nn::Module {
+/*
+    Multi-Scale Deformable Attention Module
+    :param d_model      hidden dimension
+    :param n_levels     number of feature levels
+    :param n_heads      number of attention heads
+    :param n_points     number of sampling points per attention head per feature level
+*/
 public:
     MSDeformAttnImpl() {  } //default constructor for other classes' initialization
     MSDeformAttnImpl(int const&,
@@ -216,15 +211,17 @@ public:
                           torch::Tensor&,
                           std::initializer_list<torch::Tensor>&);
 private:
-    int d_model;
-    int n_levels;
-    int n_heads;
-    int n_points;
-    int im2col_step = 128;
-    torch::nn::Linear sampling_offsets = nullptr;
-    torch::nn::Linear attention_weights = nullptr;
-    torch::nn::Linear value_proj = nullptr;
-    torch::nn::Linear output_proj = nullptr;
+    int
+        d_model,
+        n_levels,
+        n_heads,
+        n_points,
+        im2col_step = 128;
+    torch::nn::Linear
+        sampling_offsets = nullptr,
+        attention_weights = nullptr,
+        value_proj = nullptr,
+        output_proj = nullptr;
 };
 TORCH_MODULE(MSDeformAttn);
 
@@ -232,8 +229,11 @@ MSDeformAttnImpl::MSDeformAttnImpl(
     int const& d = 256,
     int const& n_levels = 4,
     int const& n_heads = 8,
-    int const& n_points = 4) :
-d_model(d), n_levels(n_levels), n_heads(n_heads), n_points(n_points)
+    int const& n_points = 4
+) : d_model(d),
+    n_levels(n_levels),
+    n_heads(n_heads),
+    n_points(n_points)
 {
     if (d_model % n_heads != 0)
         std::cerr << "d_model must be divisible by n_heads, but got " <<
@@ -244,14 +244,12 @@ d_model(d), n_levels(n_levels), n_heads(n_heads), n_points(n_points)
                      dimension of each attention head a power of 2 \
                      which is more efficient in our CUDA implementation.";
 
-    torch::nn::Linear sampling_offsets = 
-        torch::nn::Linear(d_model, n_heads*n_levels*n_points*2);
-    torch::nn::Linear attention_weights = 
-        torch::nn::Linear(d_model, n_heads*n_levels*n_points);
-    torch::nn::Linear value_proj = 
-        torch::nn::Linear(d_model, d_model);
-    torch::nn::Linear output_proj = 
-        torch::nn::Linear(d_model, d_model);
+    torch::nn::Linear sampling_offsets = torch::nn::Linear(d_model,
+                                                           n_heads*n_levels*n_points*2);
+    torch::nn::Linear attention_weights = torch::nn::Linear(d_model,
+                                                            n_heads*n_levels*n_points);
+    torch::nn::Linear value_proj = torch::nn::Linear(d_model, d_model);
+    torch::nn::Linear output_proj = torch::nn::Linear(d_model, d_model);
     reset_parameters();
 }
 
@@ -288,6 +286,17 @@ torch::Tensor MSDeformAttnImpl::forward(
     torch::Tensor& input_level_start_index,
     std::initializer_list<torch::Tensor>& input_padding_mask_list)
 {
+/*
+    :param query                       (N, Length_{query}, C)
+    :param reference_points            (N, Length_{query}, n_levels, 2), range in [0, 1], top-left (0,0), bottom-right (1, 1), including padding area
+                                    or (N, Length_{query}, n_levels, 4), add additional (w, h) to form reference boxes
+    :param input_flatten               (N, \sum_{l=0}^{L-1} H_l \cdot W_l, C)
+    :param input_spatial_shapes        (n_levels, 2), [(H_0, W_0), (H_1, W_1), ..., (H_{L-1}, W_{L-1})]
+    :param input_level_start_index     (n_levels, ), [0, H_0*W_0, H_0*W_0+H_1*W_1, H_0*W_0+H_1*W_1+H_2*W_2, ..., H_0*W_0+H_1*W_1+...+H_{L-1}*W_{L-1}]
+    :param input_padding_mask          (N, \sum_{l=0}^{L-1} H_l \cdot W_l), True for padding elements, False for non-padding elements
+
+    :return output                     (N, Length_{query}, C)
+*/
     int N = int(query.sizes()[0]);
     int Len_q = int(query.sizes()[1]);
     int Len_in = int(input_flatten.sizes()[1]);
@@ -384,6 +393,9 @@ torch::Tensor MSDeformAttnImpl::forward(
 
 
 class MSDeformAttnTransformerEncoderLayer : torch::nn::Module {
+/*
+Class for individual Encoder's layer
+*/
 public:
     MSDeformAttnTransformerEncoderLayer(int const&,
                                         int const&,
@@ -417,7 +429,6 @@ public:
                           std::vector<torch::Tensor>&,
                           torch::Tensor&,
                           std::initializer_list<torch::Tensor>&);
-    
 
 private:
     MSDeformAttn self_attn;
@@ -617,96 +628,6 @@ std::vector<torch::Tensor> MSDeformAttnTransformerEncoderOnly::forward(
 }
 
 
-class PositionEmbeddingSine : torch::nn::Module {
-public:
-    PositionEmbeddingSine(int const&,
-                          int const&,
-                          bool const&,
-                          double const&);
-    // class methods:
-    torch::Tensor forward(torch::Tensor&,
-                          torch::Tensor);
-private:
-    int num_pos_feats, temperature;
-    bool normalize;
-    double scale;
-};
-
-PositionEmbeddingSine::PositionEmbeddingSine(int const& num_pos_feats = 64,
-                                             int const& temperature = 10000,
-                                             bool const& normalize = false,
-                                             double const& scale = 0.) : 
-torch::nn::Module(), num_pos_feats(num_pos_feats), temperature(temperature), normalize(normalize)
-{
-    if (scale != 0 && !normalize)
-        std::cerr << "normalize should be true if scale is passed";
-    if (scale == 0)
-        this->scale = 2 * M_PI;
-    this->scale = scale;
-}
-
-torch::Tensor PositionEmbeddingSine::forward(torch::Tensor& x,
-                                             torch::Tensor mask = torch::Tensor())
-{
-    if (!mask.defined())
-        mask = torch::zeros({x.sizes()[0], x.sizes()[2], x.sizes()[3]},
-                            torch::TensorOptions().device(x.device()).dtype(torch::kBool));
-    torch::Tensor not_mask = ~mask;
-    torch::Tensor y_embed = not_mask.cumsum(1, torch::kFloat32);
-    torch::Tensor x_embed = not_mask.cumsum(2, torch::kFloat32);
-    if (this->normalize) {
-        double eps = 1e-6;
-        y_embed = y_embed / (y_embed.index({torch::indexing::Slice(),
-                                           torch::indexing::Slice(-1, torch::indexing::None),
-                                           torch::indexing::Slice()})
-                                           + eps) * this->scale;
-        x_embed = x_embed / (x_embed.index({torch::indexing::Slice(),
-                                           torch::indexing::Slice(),
-                                           torch::indexing::Slice(-1, torch::indexing::None)})
-                                           + eps) * this->scale;
-    }
-    torch::Tensor dimension_t = torch::arange(this->num_pos_feats,
-                                              torch::TensorOptions().dtype(torch::kFloat32).device(x.device()));
-    dimension_t = pow(this->temperature,
-                      (2 * torch::floor_divide(dimension_t, 2) / this->num_pos_feats));
-
-    torch::Tensor pos_x = x_embed.index({torch::indexing::Slice(),
-                                        torch::indexing::Slice(),
-                                        torch::indexing::Slice(),
-                                        torch::indexing::Slice(torch::indexing::None)})
-                                        / dimension_t;
-
-    torch::Tensor pos_y = y_embed.index({torch::indexing::Slice(),
-                                        torch::indexing::Slice(),
-                                        torch::indexing::Slice(),
-                                        torch::indexing::Slice(torch::indexing::None)})
-                                        / dimension_t;
-
-    pos_x = torch::stack({pos_x.index({torch::indexing::Slice(),
-                                      torch::indexing::Slice(),
-                                      torch::indexing::Slice(),
-                                      torch::indexing::Slice(0, torch::indexing::None, 2)}).sin(),
-                          pos_x.index({torch::indexing::Slice(),
-                                      torch::indexing::Slice(),
-                                      torch::indexing::Slice(),
-                                      torch::indexing::Slice(1, torch::indexing::None, 2)}).cos()},
-                          4).flatten(3);
-
-    pos_y = torch::stack({pos_y.index({torch::indexing::Slice(),
-                                      torch::indexing::Slice(),
-                                      torch::indexing::Slice(),
-                                      torch::indexing::Slice(0, torch::indexing::None, 2)}).sin(),
-                          pos_y.index({torch::indexing::Slice(),
-                                      torch::indexing::Slice(),
-                                      torch::indexing::Slice(),
-                                      torch::indexing::Slice(1, torch::indexing::None, 2)}).cos()},
-                          4).flatten(3);
-
-    torch::Tensor pos = torch::cat({pos_y, pos_x}, 3).permute({0, 3, 1, 2});
-    return pos;
-}
-
-
 void c2_xavier_fill(torch::nn::Conv2d& conv)
 {
         torch::nn::init::kaiming_uniform_(conv->weight.data(), 1);
@@ -715,6 +636,10 @@ void c2_xavier_fill(torch::nn::Conv2d& conv)
 
 
 class MaskDINO2Encoder : torch::nn::Module {
+/*
+    This is the multi-scale encoder in detection models,
+    also named as pixel decoder in segmentation models.
+*/
 public:
     MaskDINO2Encoder(std::set< std::pair<std::string, ShapeSpec> >&,
                      float const&,
@@ -779,12 +704,26 @@ MaskDINO2Encoder::MaskDINO2Encoder(
     int const& common_stride,
     int const& num_feature_levels,
     int const& total_num_feature_levels,
-    std::string const& feature_order = "low2high") : 
-torch::nn::Module(),
-feature_order(feature_order), 
-total_num_feature_levels(total_num_feature_levels),
-common_stride(common_stride)
+    std::string const& feature_order = "low2high"
+) : torch::nn::Module(),
+    feature_order(feature_order), 
+    total_num_feature_levels(total_num_feature_levels),
+    common_stride(common_stride)
 {
+/*
+    Args:
+        input_shape: shapes (channels and stride) of the input features
+        transformer_dropout: dropout probability in transformer
+        transformer_nheads: number of heads in transformer
+        transformer_dim_feedforward: dimension of feedforward network
+        transformer_enc_layers: number of transformer encoder layers
+        conv_dims: number of output channels for the intermediate conv layers.
+        mask_dim: number of output channels for the final conv layer.
+        norm (str or callable): normalization for all conv layers
+        num_feature_levels: feature scales used
+        total_num_feature_levels: total feautre scales used (include the downsampled features)
+        feature_order: 'low2high' or 'high2low', i.e., 'low2high' means low-resolution features are put in the first.
+*/
     std::set< std::pair<std::string, ShapeSpec> > transformer_input_shape{};
     for (const auto& [k, v] : input_shape) {
         in_features.push_back(k);
@@ -922,8 +861,14 @@ common_stride(common_stride)
 
 std::vector<torch::Tensor> MaskDINO2Encoder::forward_features(
     std::unordered_map<std::string, torch::Tensor>& features,
-    std::vector<torch::Tensor>& masks)
+    std::vector<torch::Tensor>& masks
+)
 {
+/*
+    :param features: multi-scale features from the backbone
+    :param masks: image mask
+    :return: enhanced multi-scale features and mask feature (1/4 resolution) for the decoder to produce binary mask
+*/
     std::vector<torch::Tensor> srcs;
     std::vector<torch::Tensor> pos;
     std::vector<torch::Tensor> srcsl;
@@ -1013,4 +958,3 @@ std::vector<torch::Tensor> MaskDINO2Encoder::forward_features(
     ret.insert(ret.end(), multiscale_features.begin(), multiscale_features.end());
     return ret;    
 }
-

@@ -3,7 +3,6 @@
 #include <torch/torch.h>
 #include <string>
 #include <vector>
-#include "criterion.h"
 
 #ifndef MATCHER_H
 #define MATCHER_H
