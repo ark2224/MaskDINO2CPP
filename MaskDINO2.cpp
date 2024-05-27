@@ -24,7 +24,6 @@ public:
               bool sspbi,
               float pm,
               float ps,
-              // Additional args for inference:
               bool so,
               bool po,
               bool io,
@@ -78,8 +77,6 @@ public:
               sem_seg_postprocess_before_inference(sspbi),
               pixel_mean(pm),
               pixel_std(ps) { }
-
-    MaskDINO2 *from_config(CfgNode); //should you have this?
     
     std::vector<std::unordered_map< std::string, torch::Tensor >> forward(vector<vector<torch::Tensor>> batched_inputs);
     /*Args:
@@ -107,17 +104,8 @@ public:
                         Each dict contains keys "id", "category_id", "isthing".
     */
 
-    vector<torch::Tensor> prepare_targets(torch::Tensor&, torch::Tensor&);
+   MaskDINO2 *from_config(CfgNode);
 
-    vector<torch::Tensor> prepare_targets_detr(torch::Tensor, torch::Tensor);
-
-    torch::Tensor sematnic_inference(torch::Tensor, torch::Tensor);
-
-    torch::Tensor panoptic_inference(torch::Tensor&, torch::Tensor&);//check return type
-
-    torch::Tensor instance_inference(torch::Tensor, torch::Tensor, torch::Tensor);//check return type
-
-    torch::Tensor box_postprocess(torch::Tensor, int, int);
 
 private:
 /*  Args:
@@ -170,7 +158,9 @@ private:
     bool semantic_ce_loss = false;
 };
 
-MaskDINO2 *MaskDINO2::from_config(CfgNode cfg) { //should you have this?
+MaskDINO2 *MaskDINO2::from_config(CfgNode cfg) {
+    // Creates MaskDINO2 from json configuration file
+
     backbone = build_backbone(cfg);
     semantic_seg_head = build_semantic_seg_head(cfg, &backbone.output_shape());
 
@@ -238,7 +228,6 @@ MaskDINO2 *MaskDINO2::from_config(CfgNode cfg) { //should you have this?
     if (deep_supervision) {
         float dec_layers = model_vec.at("dec_layers");
         std::unordered_map<std::string, float> aux_weight_dict = {};
-        // =================================================LEFT OFF HERE FOR CONFIG=================================================
     }
 
     return this;
@@ -252,13 +241,12 @@ std::vector<std::unordered_map< std::string, torch::Tensor >>
     //      each vector<torch::Tensor> is an image (index 0) and an instance:
     //          "image": Tensor, image in (C, H, W) format.
     //          "instances": per-region ground truth
+
     std::vector<torch::Tensor> images;
-    // ImageList img_lst = ImageList();
     for (vector<torch::Tensor> &ii : batched_inputs) {
         torch::Tensor x = (ii[0] - pixel_mean) / pixel_std;
         images.push_back(x);
     }
-    // skipping the part that they would use an ImageList for images
 
     std::vector<torch::Tensor> features;
     for (auto &t : images) {
@@ -268,7 +256,6 @@ std::vector<std::unordered_map< std::string, torch::Tensor >>
     if (training) {
         ;
         std::vector<std::unordered_map< std::string, torch::Tensor >> processed_results;
-        // will fill in later
         return processed_results;
     }
     else {
@@ -287,6 +274,7 @@ std::vector<std::unordered_map< std::string, torch::Tensor >>
             outputs.push_back(out);
             mask_cls_results.push_back(out["pred_logits"]);
             mask_box_results.push_back(out["pred_boxes"]);
+
             // upsample
             mask_pred_results.push_back(
                 torch::nn::functional::interpolate(out["pred_masks"], options)
@@ -298,9 +286,8 @@ std::vector<std::unordered_map< std::string, torch::Tensor >>
         for (int i = 0; i < images.size(); ++i) {
             int height = int(images[i].size(0));
             int width = int(images[i].size(1));
-            // skipped real height^
             processed_results.push_back({});
-            std::vector<int64_t> new_size{mask_pred_results[i].size(-2), mask_pred_results[i].size(-1)}; // padded size
+            std::vector<int64_t> new_size{mask_pred_results[i].size(-2), mask_pred_results[i].size(-1)};
 
             if (sem_seg_postprocess_before_inference) {
                 mask_pred_results[i] = sem_seg_postprocessing(mask_pred_results[i], sizes, height, width);
@@ -336,37 +323,3 @@ std::vector<std::unordered_map< std::string, torch::Tensor >>
 
     }
 }
-
-
-vector<torch::Tensor> MaskDINO2::prepare_targets(torch::Tensor &targets, torch::Tensor &images) {
-    return std::vector<torch::Tensor> {targets};
-}
-
-vector<torch::Tensor> MaskDINO2::prepare_targets_detr(torch::Tensor targets, torch::Tensor images) {
-    return std::vector<torch::Tensor> {targets};
-}
-
-torch::Tensor MaskDINO2::sematnic_inference(torch::Tensor mask_cls, torch::Tensor mask_pred) {
-    return mask_pred;
-}
-
-torch::Tensor MaskDINO2::panoptic_inference(torch::Tensor &mask_cls, torch::Tensor &mask_pred) {
-    return mask_pred;
-}
-
-torch::Tensor MaskDINO2::instance_inference(torch::Tensor mask_cls, torch::Tensor mask_pred, torch::Tensor mask_box_result) {//check return type
-    return mask_pred;
-}
-
-torch::Tensor MaskDINO2::box_postprocess(torch::Tensor out_bbox, int img_h, int img_w) {
-    return out_bbox;
-}
-
-
-// int main()
-// {
-//     cout << "\n ========================= Working ========================= \n" << endl;
-//     detectron2().boo();
-
-//     return 0;
-// }
