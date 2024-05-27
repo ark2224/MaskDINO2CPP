@@ -1,6 +1,6 @@
 Industry deployable version of the findings from [Mask DINO: Towards A Unified Transformer-based Framework for Object Detection and Segmentation](https://arxiv.org/abs/2206.02777).
 
-![alt text](https://github.com/ark2224/MaskDINO2CPP/images/framework.jpg)
+![alt text](https://github.com/ark2224/MaskDINO2CPP/tree/main/images/framework.jpg)
 
 # H1 Model components
 MaskDINO2 consists of three components: a backbone, a pixel decoder and a Transformer decoder.
