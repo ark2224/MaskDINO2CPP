@@ -29,10 +29,12 @@ public:
     // class methods:
     static torch::Tensor with_pos_embed(torch::Tensor x, torch::Tensor pos) 
     {
-        if (pos.defined())
+        if (pos.defined()) {
             return x;
-        else
+        }
+        else {
             return x + pos;
+        }
     }
     torch::Tensor forward_ffn(torch::Tensor&);
     torch::Tensor forward(torch::Tensor,
@@ -91,6 +93,8 @@ DeformableTransformerDecoderLayerImpl::DeformableTransformerDecoderLayerImpl(
     std::string key_aware_type = ""
 ) : torch::nn::Module(), key_aware_type(key_aware_type)
 {
+    // Creation of main constructor for the decoder of the Transformer portion of MaskDINO
+
     this->cross_attn = MSDeformAttn(d_model, n_levels, n_heads, n_points);
     dropout1 = torch::nn::Dropout(dropout);
     norm1 = torch::nn::LayerNorm(torch::nn::LayerNormOptions({d_model}));
@@ -118,6 +122,9 @@ DeformableTransformerDecoderLayerImpl::DeformableTransformerDecoderLayerImpl(
 
 
 torch::Tensor DeformableTransformerDecoderLayerImpl::forward_ffn(torch::Tensor& tgt) {
+    /*
+        Modifiable forward function for the Transformer's decoder
+    */
     torch::Tensor tgt2 = linear2(dropout3(activation_layer->forward(linear1(tgt))));
     tgt = tgt + dropout4(tgt);
     tgt = norm3(tgt);
@@ -142,6 +149,10 @@ torch::Tensor DeformableTransformerDecoderLayerImpl::forward(
 /*
     Input:
         - tgt/tgt_query_pos: nq, bs, d_model
+        - memory: hw, bs, d_model
+        - pos: hw, bs, d_model
+        - refpoints_unsigmoid: nq, bs, 2/4
+        - valid_ratios/spatial_shapes: bs, nlevel, 2
 */
     torch::Tensor tgt2;
     if (self_attn != nullptr) {
@@ -179,7 +190,8 @@ torch::Tensor DeformableTransformerDecoderLayerImpl::forward(
 
 
 torch::nn::Sequential _get_clones(DeformableTransformerDecoderLayer module, int N) {
-// overloaded of method ./utils/modules.h get_clones to take in custom submodule
+    // overloaded of method ./utils/modules.h get_clones to take in custom submodule
+
     torch::nn::Sequential ret = {};
     for (int i = 0; i < N; ++N)
         ret->push_back(module);
@@ -199,13 +211,13 @@ public:
                        bool,
                        int,
                        bool,
-                    //    decoder_query_perturber,
                        std::vector<DeformableTransformerDecoderLayer>,
                        bool,
-                    //    bool,
                        std::vector<float>);
+
     // class methods:
     void reset_parameters();
+
     std::vector< std::vector<torch::Tensor> > forward(torch::Tensor&,
                                                       torch::Tensor&,
                                                       torch::Tensor,
@@ -267,6 +279,10 @@ TransformerDecoder::TransformerDecoder(
     decoder_layer_number(dec_layer_num),
     dec_layer_dropout_prob(dec_layer_dropout_prob)
 {
+    /*
+        Primary Constructor of Transformer Decoder Class
+    */
+
     if (num_layers > 0) {
         layers = _get_clones(decoder_layer, num_layers);
         register_module("layers", layers);
@@ -323,6 +339,7 @@ std::vector< std::vector<torch::Tensor> > TransformerDecoder::forward(
         - refpoints_unsigmoid: nq, bs, 2/4
         - valid_ratios/spatial_shapes: bs, nlevel, 2
 */
+
     torch::Tensor output = tgt;
     torch::Device device = tgt.device();
     std::vector<torch::Tensor> intermediate{};
@@ -423,21 +440,27 @@ public:
                                               torch::Tensor&,
                                               torch::Tensor&,
                                               int);
+
     std::vector<torch::Tensor> dn_post_process(torch::Tensor&,
                                   torch::Tensor&,
                                   std::unordered_map<std::string, torch::Tensor>&,
                                   torch::Tensor&);
+
     torch::Tensor get_valid_ratio(torch::Tensor&);
+
     torch::Tensor pred_box(std::vector<torch::Tensor>&,
                            std::vector<torch::Tensor>&,
                            torch::Tensor);
+
     std::unordered_map<std::string, torch::Tensor> forward(std::vector<torch::Tensor>&,
                                                            torch::Tensor&,
                                                            std::vector<torch::Tensor>&,
                                                            std::vector< std::unordered_map<std::string, torch::Tensor> >&);
+
     std::vector<torch::Tensor> forward_prediction_heads(torch::Tensor&,
                                                         torch::Tensor&,
                                                         bool);
+
     std::unordered_map<std::string, torch::Tensor> _set_aux_loss(torch::Tensor&,
                                                                  torch::Tensor&,
                                                                  torch::Tensor);
@@ -598,13 +621,11 @@ hidden_dim(hidden_dim)
                                                     num_feature_levels,
                                                     dec_layer_share);
     torch::nn::Sequential bbox_embed = {};
-    // torch::nn::ModuleDict bbox_dict = {};
     for (int i = 0; i < num_layers; ++i) {
 
         MLP new_bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3);
         torch::nn::init::constant_(new_bbox_embed->fc2->weight.data(), 0);
         torch::nn::init::constant_(new_bbox_embed->fc2->bias.data(), 0);
-        // bbox_dict["mlp" + i] = _bbox_embed.ptr();
         bbox_embed->push_back(new_bbox_embed);
     }
     decoder.bbox_embed = bbox_embed;
@@ -616,7 +637,7 @@ std::vector<torch::Tensor> MaskDINO2Decoder::prepare_for_dn(std::vector< std::un
                                                             int batch_size)
 {
 /*
-    modified from dn-detr. You can refer to dn-detr
+    modified from dn-detr. Please refer to dn-detr
     https://github.com/IDEA-Research/DN-DETR/blob/main/models/dn_dab_deformable_detr/dn_components.py
     for more details
         :param dn_args: scalar, noise_scale
@@ -648,7 +669,7 @@ std::vector<torch::Tensor> MaskDINO2Decoder::prepare_for_dn(std::vector< std::un
         else
             scalar = 0;
         if (scalar == 0) {
-            mask_dict_inclass = mask_dict; // saving locally to return different objects     
+            mask_dict_inclass = mask_dict; // saving locally to return different objects
             return std::vector<torch::Tensor> {input_query_label, input_query_bbox, attn_mask};
         }
 
@@ -772,9 +793,10 @@ std::vector<torch::Tensor> MaskDINO2Decoder::dn_post_process(
 )
 {
 /*
-    post process of dn after output from the transformer
+    Post process of dn after output from the transformer
     put the dn part in the mask_dict
 */
+
     assert(mask_dict["pad_size"].item<int>() > 0);
     int pad_size = mask_dict["pad_size"].item<int>();
     torch::Tensor output_known_class = outputs_class.index({torch::indexing::Slice(),
@@ -1105,7 +1127,7 @@ std::unordered_map<std::string, torch::Tensor> MaskDINO2Decoder::_set_aux_loss(
 )
 {
 /*
-    Custom function similar to torchscript function
+    Custom function similar to torchscript function set_aux_loss
 */
     std::unordered_map<std::string, torch::Tensor> ret;
     torch::Tensor oc = outputs_class.index({torch::indexing::Slice(torch::indexing::None, -1)});
