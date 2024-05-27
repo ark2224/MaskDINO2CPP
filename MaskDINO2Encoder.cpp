@@ -10,32 +10,37 @@
 #include "utils/position_encoding.h"
 #include "matcher.h"
 #include "memory.h"
-// #include "ms_deform_attn_cuda/ms_deform_attn_cuda.cu"
-// #include "ms_deform_attn_cuda/ms_deform_im2col_cuda.cuh"
-// #include "ms_deform_attn_cuda/ms_deform_attn_cuda.h"
 
 
 class MSDeformAttnTransformerEncoderImpl : torch::nn::Module {
 /*
     MSDeformAttn Transformer encoder in deformable detr
+    This is the first half of the transformer
+    Supporting functions and classes included in this file, below
 */
 public:
-    //default constructor for initialization of classes later in this file
     MSDeformAttnTransformerEncoderImpl() {  }
-    MSDeformAttnTransformerEncoderImpl(torch::nn::AnyModule& encoder_layer,
-                                       int const& num_l)
-        : num_layers(num_l), torch::nn::Module()
-        { layers = get_clones(encoder_layer, num_layers); }
+    MSDeformAttnTransformerEncoderImpl(
+        torch::nn::AnyModule& encoder_layer,
+        int const& num_l) :
+        num_layers(num_l),
+        torch::nn::Module()
+        {
+            layers = get_clones(encoder_layer, num_layers);
+        }
+
     // class methods:
     static torch::Tensor get_reference_points(std::vector< std::pair<int, int> >&,
                                               torch::Tensor&,
                                               torch::Device);
+
     torch::Tensor forward(torch::Tensor&,
                           std::vector< std::pair<int, int> >&,
                           torch::Tensor&,
                           torch::Tensor&,
                           torch::Tensor&,
                           torch::Tensor&);
+
 private:
     torch::nn::Sequential
         layers = nullptr;
@@ -135,7 +140,7 @@ torch::Tensor MSDeformAttnFunction::forward(
     int& im2col_step
 )
 {
-    // can download ms_deform_attn_cuda_forward and save_for_backward from:
+    // Optional: download pythonic version of ms_deform_attn_cuda_forward and save_for_backward from:
     // https://github.com/fundamentalvision/Deformable-DETR/blob/main/models/ops/src/cuda/ms_deform_attn_cuda.h
     torch::Tensor output = ms_deform_attn_cuda_forward(
         value,
@@ -172,6 +177,9 @@ torch::Tensor ms_deform_attn_core_pytorch(torch::Tensor& value,
                                           torch::Tensor& sampling_locations,
                                           torch::Tensor& attention_weights)
 {
+    /*
+        Optional: feel free to refer to link below for reference to deformable attention using CUDA gpu
+    */
     // https://github.com/IDEA-Research/MaskDINO/blob/main/maskdino/modeling/pixel_decoder/ops/functions/ms_deform_attn_func.py
     int N_ = int(value.sizes()[0]);
     int S_ = int(value.sizes()[1]);
@@ -182,15 +190,12 @@ torch::Tensor ms_deform_attn_core_pytorch(torch::Tensor& value,
     int L_ = int(sampling_locations.sizes()[3]);
     int P_ = int(sampling_locations.sizes()[4]);
 
-    // torch::Tensor value_list = value.split({H_ * W_ for auto& H_, W_ in value_spatial_shapes}, -1)
-    // ====================================== FILL IN FUNCTION TO CATCH EXCEPTION BELOW: ===========================================
-
 }
 
 
 class MSDeformAttnImpl : torch::nn::Module {
 /*
-    Multi-Scale Deformable Attention Module
+    Multi-Scale Deformable Attention Module: provides memory within transformer in series of inferences
     :param d_model      hidden dimension
     :param n_levels     number of feature levels
     :param n_heads      number of attention heads
@@ -235,6 +240,9 @@ MSDeformAttnImpl::MSDeformAttnImpl(
     n_heads(n_heads),
     n_points(n_points)
 {
+    /*
+        Main constructor for MSDeformAttn
+    */
     if (d_model % n_heads != 0)
         std::cerr << "d_model must be divisible by n_heads, but got " <<
                     d_model << " and " << n_heads;
@@ -287,6 +295,7 @@ torch::Tensor MSDeformAttnImpl::forward(
     std::initializer_list<torch::Tensor>& input_padding_mask_list)
 {
 /*
+Parameters descriptions:
     :param query                       (N, Length_{query}, C)
     :param reference_points            (N, Length_{query}, n_levels, 2), range in [0, 1], top-left (0,0), bottom-right (1, 1), including padding area
                                     or (N, Length_{query}, n_levels, 4), add additional (w, h) to form reference boxes
@@ -394,7 +403,7 @@ torch::Tensor MSDeformAttnImpl::forward(
 
 class MSDeformAttnTransformerEncoderLayer : torch::nn::Module {
 /*
-Class for individual Encoder's layer
+    Sub-class for individual layer of the MaskDINO's Transformer's Decoder
 */
 public:
     MSDeformAttnTransformerEncoderLayer(int const&,
@@ -456,6 +465,9 @@ MSDeformAttnTransformerEncoderLayer::MSDeformAttnTransformerEncoderLayer(
     int const& n_points = 4)
 : torch::nn::Module()
 {
+    /*
+        Main class constructor for the Encoder Layer
+    */
     self_attn = MSDeformAttn(d_model, n_levels, n_heads, n_points);
     dropout1 = torch::nn::Dropout(dropout);
     norm1 = torch::nn::LayerNorm(d_model);
@@ -503,6 +515,9 @@ torch::Tensor MSDeformAttnTransformerEncoderLayer::forward(
 
 
 class MSDeformAttnTransformerEncoderOnly : torch::nn::Module {
+/*
+    Parent class for Transformer Encoder using deformable attention
+*/
 public:
     MSDeformAttnTransformerEncoderOnly(int d = 256,
                                        int nhead = 8,
@@ -542,6 +557,8 @@ public:
 };
 
 void MSDeformAttnTransformerEncoderOnly::reset_parameters() {
+    // Parameter regularization/normalization
+
     for (auto& p : parameters()) {
         if (p.dim() > 1)
             torch::nn::init::xavier_uniform_(p);
@@ -576,6 +593,9 @@ std::vector<torch::Tensor> MSDeformAttnTransformerEncoderOnly::forward(
     std::vector<torch::Tensor>& masks,
     std::vector<torch::Tensor>& pos_embeds)
 {
+    /*
+        Use this forward pass before decoder-forward to complete a full pass through transformer
+    */
     int enable_mask = 0;
     if (!masks.empty()) {
         for (torch::Tensor& src : srcs) {
@@ -616,14 +636,23 @@ std::vector<torch::Tensor> MSDeformAttnTransformerEncoderOnly::forward(
     torch::Tensor Lvl_pos_embed_flatten = torch::cat(lvl_pos_embed_flatten, 1);
     torch::Tensor Spatial_shapes = torch::from_blob(spatial_shapes.data(),
                                                     spatial_shapes.size(),
-                                                    torch::TensorOptions().dtype(torch::kLong).device(Src_flatten.device()));
-    torch::Tensor Level_start_index = torch::cat({Spatial_shapes.new_zeros((1)), Spatial_shapes.prod(1).cumsum(0).index({torch::indexing::Slice(torch::indexing::None, -1)})});
+                                                    torch::TensorOptions().dtype(torch::kLong)
+                                                                          .device(Src_flatten.device()));
+    torch::Tensor Level_start_index = torch::cat({
+        Spatial_shapes.new_zeros((1)),
+        Spatial_shapes.prod(1).cumsum(0).index({torch::indexing::Slice(torch::indexing::None, -1)})
+    });
     
     std::vector<torch::Tensor> valid_ratios_vector{};
     for (torch::Tensor &m : masks)
         valid_ratios_vector.push_back(m);
     torch::Tensor valid_ratios = torch::stack(valid_ratios_vector, 1);
-    torch::Tensor memory = this->encoder->forward(Src_flatten, spatial_shapes, Level_start_index, valid_ratios, Lvl_pos_embed_flatten, Mask_flatten);
+    torch::Tensor memory = this->encoder->forward(Src_flatten,
+                                                  spatial_shapes,
+                                                  Level_start_index,
+                                                  valid_ratios,
+                                                  Lvl_pos_embed_flatten,
+                                                  Mask_flatten);
     return std::vector<torch::Tensor> {memory, Level_start_index};
 }
 
@@ -729,8 +758,13 @@ MaskDINO2Encoder::MaskDINO2Encoder(
         in_features.push_back(k);
         feature_strides.push_back(v.stride);
         feature_channels.push_back(v.channels);
-        if (std::find(transformer_in_features_local.begin(), transformer_in_features_local.end(), k) != transformer_in_features_local.end())
+        if (std::find(transformer_in_features_local.begin(),
+                      transformer_in_features_local.end(),
+                      k)
+            != transformer_in_features_local.end())
+        {
             transformer_input_shape.insert(std::make_pair(k, v));
+        }
     }
     std::sort(transformer_input_shape.begin(), transformer_input_shape.end(),
         [=](const auto& a){ return a.second.stride; }
